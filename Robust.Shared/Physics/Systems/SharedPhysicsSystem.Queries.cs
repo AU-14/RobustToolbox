@@ -295,6 +295,9 @@ namespace Robust.Shared.Physics.Systems
                 rayBox,
                 broadphase =>
                 {
+                    if (returnOnFirstHit && results.Count > 0) // CMU14: later broadphases cannot contribute another result.
+                        return;
+
                     var (_, rot, matrix, invMatrix) =
                         _transform.GetWorldPositionRotationMatrixWithInv(broadphase.Owner);
 
@@ -336,9 +339,12 @@ namespace Robust.Shared.Physics.Systems
                                 _netMan.IsServer,
                                 mapId));
 #endif
-                            return true;
+                            return !returnOnFirstHit; // CMU14: stop traversing this tree after accepting the first hit.
                         },
                         gridRay);
+
+                    if (returnOnFirstHit && results.Count > 0) // CMU14: skip the dynamic tree after a static hit.
+                        return;
 
                     broadphase.Comp.DynamicTree.QueryRay(
                         (in FixtureProxy proxy, in Vector2 point, float distFromOrigin) =>
@@ -372,7 +378,7 @@ namespace Robust.Shared.Physics.Systems
                                 _netMan.IsServer,
                                 mapId));
 #endif
-                            return true;
+                            return !returnOnFirstHit; // CMU14: stop traversing this tree after accepting the first hit.
                         },
                         gridRay);
                 });

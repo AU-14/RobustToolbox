@@ -113,6 +113,7 @@ namespace Robust.Shared.Serialization
                     new NetComponentDeltaStateSerializer(),
                     new NetFormattedStringSerializer(),
                     new NetUnsafeFloatSerializer(),
+                    new NetVector2iUlongDictionarySerializer(), // CMU14: allocation-free roof dictionary writes, same wire format.
                 }
             };
 
