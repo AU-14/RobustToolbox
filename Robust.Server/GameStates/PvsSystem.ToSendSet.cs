@@ -35,6 +35,9 @@ internal sealed partial class PvsSystem
 
         var fromTick = session.FromTick;
         var mask = session.VisMask;
+        // CMU14: the tick is fixed throughout state generation. Read the clock once
+        // per chunk instead of repeatedly dispatching through IGameTiming per entity.
+        var curTick = _gameTiming.CurTick;
 
         // Send the map.
         if (!AddEntity(session, chunk.Map, fromTick))
@@ -54,13 +57,26 @@ internal sealed partial class PvsSystem
 
         // Send entities on the chunk.
         var span = CollectionsMarshal.AsSpan(chunk.Contents)[..count];
+        // CMU14: entity storage cannot grow during parallel state generation. Cache
+        // its checked spans once instead of looking up both memory regions per entity.
+        var metadata = _metadataMemory.GetSpan();
+        var sessionData = session.DataMemory.GetSpan();
         foreach (ref var ent in span)
         {
-            ref var meta = ref _metadataMemory.GetRef(ent.Ptr.Index);
+            ref var meta = ref metadata[ent.Ptr.Index]; // CMU14
             meta.Validate(ent.Meta);
             if ((mask & meta.VisMask) == meta.VisMask)
-                AddEntity(session, ref ent, ref meta, fromTick);
+                AddEntity(session, ref ent, ref meta, ref sessionData[ent.Ptr.Index], fromTick, curTick); // CMU14
         }
+    }
+
+    // CMU14 method: overrides use the same path without a surrounding chunk tick snapshot.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void AddEntity(PvsSession session, ref PvsChunk.ChunkEntity ent, ref PvsMetadata meta,
+        GameTick fromTick)
+    {
+        ref var data = ref session.DataMemory.GetRef(ent.Ptr.Index);
+        AddEntity(session, ref ent, ref meta, ref data, fromTick, _gameTiming.CurTick);
     }
 
     /// <summary>
@@ -69,12 +85,11 @@ internal sealed partial class PvsSystem
     /// <returns>Returns false if the entity would exceed the client's PVS budget.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void AddEntity(PvsSession session, ref PvsChunk.ChunkEntity ent, ref PvsMetadata meta,
-        GameTick fromTick)
+        ref PvsData data, GameTick fromTick, GameTick curTick) // CMU14: reuse the chunk's data and tick snapshot.
     {
         DebugTools.Assert(fromTick < _gameTiming.CurTick);
-        ref var data = ref session.DataMemory.GetRef(ent.Ptr.Index);
 
-        if (data.LastSeen == _gameTiming.CurTick)
+        if (data.LastSeen == curTick) // CMU14
             return;
 
         if (meta.LifeStage >= EntityLifeStage.Terminating)
@@ -83,12 +98,12 @@ internal sealed partial class PvsSystem
             return;
         }
 
-        var (entered,budgetExceeded) = IsEnteringPvsRange(ref data, fromTick, ref session.Budget);
+        var (entered,budgetExceeded) = IsEnteringPvsRange(ref data, fromTick, ref session.Budget, curTick); // CMU14
 
         if (budgetExceeded)
             return;
 
-        data.LastSeen = _gameTiming.CurTick;
+        data.LastSeen = curTick; // CMU14
         session.ToSend!.Add(ent.Ptr);
 
         if (session.RequestedFull)
@@ -122,13 +137,14 @@ internal sealed partial class PvsSystem
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private bool AddEntity(PvsSession session, Entity<MetaDataComponent> entity, GameTick fromTick)
     {
+        var curTick = _gameTiming.CurTick; // CMU14: reuse one clock read per entity.
         DebugTools.Assert(fromTick < _gameTiming.CurTick);
         ref var data = ref session.DataMemory.GetRef(entity.Comp.PvsData.Index);
 
-        if (data.LastSeen == _gameTiming.CurTick)
+        if (data.LastSeen == curTick) // CMU14
             return true;
 
-        var (entered,budgetExceeded) = IsEnteringPvsRange(ref data, fromTick, ref session.Budget);
+        var (entered,budgetExceeded) = IsEnteringPvsRange(ref data, fromTick, ref session.Budget, curTick); // CMU14
 
         if (budgetExceeded)
             return false;
@@ -160,7 +176,7 @@ internal sealed partial class PvsSystem
             return false;
         }
 
-        data.LastSeen = _gameTiming.CurTick;
+        data.LastSeen = curTick; // CMU14
         session.ToSend!.Add(entity.Comp.PvsData);
 
         // TODO PVS PERFORMANCE
@@ -205,11 +221,11 @@ internal sealed partial class PvsSystem
     private (bool Entering, bool BudgetExceeded) IsEnteringPvsRange(
         ref PvsData data,
         GameTick fromTick,
-        ref PvsBudget budget)
+        ref PvsBudget budget, GameTick curTick) // CMU14: state generation owns the tick snapshot.
     {
         var enteredSinceLastSent = fromTick == GameTick.Zero
                                    || data.LastSeen == GameTick.Zero
-                                   || data.LastSeen != _gameTiming.CurTick - 1;
+                                   || data.LastSeen != curTick - 1; // CMU14
 
         var entering = enteredSinceLastSent
                       || data.EntityLastAcked == GameTick.Zero
