@@ -23,7 +23,9 @@ internal sealed partial class PvsSystem
     /// <returns>New entity State for the given entity.</returns>
     private EntityState GetEntityState(ICommonSession? player, EntityUid entityUid, GameTick fromTick, MetaDataComponent meta)
     {
-        var changed = GetComponentChangeList(meta.NetComponents.Count);
+        // CMU14: established entities usually change only a few components. Avoid
+        // allocating a full-component array when the shared list pool is exhausted.
+        var changed = GetComponentChangeList(fromTick <= meta.CreationTick ? meta.NetComponents.Count : 0);
 
         bool sendCompList = meta.LastComponentRemoved > fromTick;
         HashSet<ushort>? netComps = sendCompList ? GetNetComponentSet() : null;
@@ -38,6 +40,11 @@ internal sealed partial class PvsSystem
                 Log.Error($"Entity manager returned deleted or uninitialized component of type {component.GetType()} on entity {ToPrettyString(entityUid)} while generating entity state data for {player?.Name ?? "replay"}");
                 continue;
             }
+
+            // CMU14: untouched components need no recipient filtering unless a
+            // removal requires rebuilding the complete visible component list.
+            if (!sendCompList && component.LastModifiedTick <= fromTick)
+                continue;
 
             if (component.SendOnlyToOwner && player != null && player.AttachedEntity != entityUid)
                 continue;

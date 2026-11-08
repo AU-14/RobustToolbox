@@ -6,6 +6,7 @@ using System.IO;
 using System.Linq;
 using System.Numerics;
 using System.Reflection;
+using System.Threading; // CMU14
 using Robust.Shared.Log;
 using Robust.Shared.Maths;
 using Robust.Shared.Reflection;
@@ -39,22 +40,25 @@ namespace Robust.Shared.Serialization
 
         private readonly object _statsLock = new();
 
-        // These stats aren't tracked correctly because the tracking code isn't thread safe. Oops!
-        public long LargestObjectSerializedBytes { get; private set; }
+        // CMU14 Begin: independent counters need no shared monitor on every parallel state write.
+        private long _largestObjectSerializedBytes;
+        private Type? _largestObjectSerializedType;
+        private long _bytesSerialized;
+        private long _objectsSerialized;
+        private long _largestObjectDeserializedBytes;
+        private Type? _largestObjectDeserializedType;
+        private long _bytesDeserialized;
+        private long _objectsDeserialized;
 
-        public Type? LargestObjectSerializedType { get; private set; }
-
-        public long BytesSerialized { get; private set; }
-
-        public long ObjectsSerialized { get; private set; }
-
-        public long LargestObjectDeserializedBytes { get; private set; }
-
-        public Type? LargestObjectDeserializedType { get; private set; }
-
-        public long BytesDeserialized { get; private set; }
-
-        public long ObjectsDeserialized { get; private set; }
+        public long LargestObjectSerializedBytes => Volatile.Read(ref _largestObjectSerializedBytes);
+        public Type? LargestObjectSerializedType => Volatile.Read(ref _largestObjectSerializedType);
+        public long BytesSerialized => Volatile.Read(ref _bytesSerialized);
+        public long ObjectsSerialized => Volatile.Read(ref _objectsSerialized);
+        public long LargestObjectDeserializedBytes => Volatile.Read(ref _largestObjectDeserializedBytes);
+        public Type? LargestObjectDeserializedType => Volatile.Read(ref _largestObjectDeserializedType);
+        public long BytesDeserialized => Volatile.Read(ref _bytesDeserialized);
+        public long ObjectsDeserialized => Volatile.Read(ref _objectsDeserialized);
+        // CMU14 End
 
         #endregion
 
@@ -113,6 +117,7 @@ namespace Robust.Shared.Serialization
                     new NetComponentDeltaStateSerializer(),
                     new NetFormattedStringSerializer(),
                     new NetUnsafeFloatSerializer(),
+                    new NetVector2iUlongDictionarySerializer(), // CMU14: allocation-free roof dictionary writes, same wire format.
                 }
             };
 
@@ -203,46 +208,48 @@ namespace Robust.Shared.Serialization
             return stream.CanSeek ? stream.Position : 0;
         }
 
+        // CMU14 Begin: only a new maximum requires coordination of its size and type.
         private void EndMeasureDeserialize(Stream stream, long start, Type type)
         {
+            Interlocked.Increment(ref _objectsDeserialized);
+            if (!stream.CanSeek)
+                return;
+
+            var byteCount = stream.Position - start;
+            Interlocked.Add(ref _bytesDeserialized, byteCount);
+            if (byteCount <= Volatile.Read(ref _largestObjectDeserializedBytes))
+                return;
+
             lock (_statsLock)
             {
-                ObjectsDeserialized += 1;
-
-                if (stream.CanSeek)
+                if (byteCount > _largestObjectDeserializedBytes)
                 {
-                    var end = stream.Position;
-                    var byteCount = end - start;
-                    BytesDeserialized += byteCount;
-
-                    if (byteCount > LargestObjectDeserializedBytes)
-                    {
-                        LargestObjectDeserializedBytes = byteCount;
-                        LargestObjectDeserializedType = type;
-                    }
+                    _largestObjectDeserializedType = type;
+                    Volatile.Write(ref _largestObjectDeserializedBytes, byteCount);
                 }
             }
         }
 
         private void EndMeasureSerialize(Stream stream, long start, Type type)
         {
+            Interlocked.Increment(ref _objectsSerialized);
+            if (!stream.CanSeek)
+                return;
+
+            var byteCount = stream.Position - start;
+            Interlocked.Add(ref _bytesSerialized, byteCount);
+            if (byteCount <= Volatile.Read(ref _largestObjectSerializedBytes))
+                return;
+
             lock (_statsLock)
             {
-                ObjectsSerialized += 1;
-
-                if (stream.CanSeek)
+                if (byteCount > _largestObjectSerializedBytes)
                 {
-                    var end = stream.Position;
-                    var byteCount = end - start;
-                    BytesSerialized += byteCount;
-
-                    if (byteCount > LargestObjectSerializedBytes)
-                    {
-                        LargestObjectSerializedBytes = byteCount;
-                        LargestObjectSerializedType = type;
-                    }
+                    _largestObjectSerializedType = type;
+                    Volatile.Write(ref _largestObjectSerializedBytes, byteCount);
                 }
             }
         }
+        // CMU14 End
     }
 }
