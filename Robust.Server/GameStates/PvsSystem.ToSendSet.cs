@@ -123,12 +123,10 @@ internal sealed partial class PvsSystem
         if (meta.LastModifiedTick <= fromTick)
             return;
 
-        var entState = GetEntityState(session.Session, ent.Uid, fromTick , ent.Meta);
-
-        if (!entState.Empty)
+        // CMU14: unchanged/hidden component data does not need an empty entity-state allocation.
+        var entState = TryGetEntityState(session.Session, ent.Uid, fromTick, ent.Meta);
+        if (entState != null)
             session.States.Add(entState);
-        else
-            ReturnEntityState(entState);
     }
 
     /// <summary>
@@ -203,12 +201,10 @@ internal sealed partial class PvsSystem
         if (meta.EntityLastModifiedTick <= fromTick)
             return true;
 
-        var entState = GetEntityState(session.Session, uid, fromTick , meta);
-
-        if (!entState.Empty)
+        // CMU14: unchanged/hidden component data does not need an empty entity-state allocation.
+        var entState = TryGetEntityState(session.Session, uid, fromTick, meta);
+        if (entState != null)
             session.States.Add(entState);
-        else
-            ReturnEntityState(entState);
 
         return true;
     }

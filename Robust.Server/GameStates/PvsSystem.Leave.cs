@@ -48,17 +48,22 @@ internal sealed partial class PvsSystem
 
         var (toTick, lastSent) = session.LastSent.Value;
 
+        // CMU14: committed storage stays valid until the leave job is joined before a reset.
+        var sessionData = session.DataMemory.GetSpan();
+        var metadata = _metadataMemory.GetSpan();
         foreach (var intPtr in CollectionsMarshal.AsSpan(lastSent))
         {
-            ref var data = ref session.DataMemory.GetRef(intPtr.Index);
+            ref var data = ref sessionData[intPtr.Index]; // CMU14
             if (data.LastSeen == toTick)
                 continue;
 
-            ref var meta = ref _metadataMemory.GetRef(intPtr.Index);
+            // CMU14: reuse the metadata already needed to choose the client's leave-message list.
+            ref var meta = ref metadata[intPtr.Index];
+            DebugTools.Assert(_assignedEnts.Contains(intPtr));
             if (meta.IsChunkEntity)
-                session.LeftViewChunkEntities.Add(IndexToNetEntity(intPtr));
+                session.LeftViewChunkEntities.Add(meta.NetEntity);
             else
-                session.LeftView.Add(IndexToNetEntity(intPtr));
+                session.LeftView.Add(meta.NetEntity);
 
             data.LastLeftView = toTick;
         }

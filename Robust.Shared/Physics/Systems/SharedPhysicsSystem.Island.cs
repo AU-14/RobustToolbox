@@ -138,6 +138,10 @@ public abstract partial class SharedPhysicsSystem
     private readonly ObjectPool<List<(Joint Original, Joint Joint)>> _islandJointPool =
         new DefaultObjectPool<List<(Joint Original, Joint Joint)>>(new ListPolicy<(Joint Original, Joint Joint)>(), MaxIslands);
 
+    // CMU14: broken-joint scratch belongs to an island for the same lifetime as its other lists.
+    private readonly ObjectPool<List<(Joint Joint, float Error)>> _islandBrokenJointPool =
+        new DefaultObjectPool<List<(Joint Joint, float Error)>>(new ListPolicy<(Joint Joint, float Error)>(), MaxIslands);
+
     internal record struct IslandData(
         int Index,
         bool LoneIsland,
@@ -339,8 +343,7 @@ public abstract partial class SharedPhysicsSystem
             _islandBodyPool.Get(),
             _islandContactPool.Get(),
             _islandJointPool.Get(),
-            // TODO: pool these lists??
-            new List<(Joint Joint, float Error)>());
+            _islandBrokenJointPool.Get()); // CMU14
 
         // Build the relevant islands / graphs for all bodies.
         foreach (var ent in _awakeBodyList)
@@ -525,7 +528,9 @@ public abstract partial class SharedPhysicsSystem
             int idx;
 
             // Bodies not touching anything, hence we can just add it to the lone island.
-            if (contacts.Count == 0 && joints.Count == 0)
+            // CMU14: return the unused lists after assigning indexes to the lone body.
+            var lone = contacts.Count == 0 && joints.Count == 0;
+            if (lone)
             {
                 DebugTools.Assert(bodies.Count == 1 && bodies[0].Comp1.BodyType != BodyType.Static);
                 loneIsland.MapUid = mapUid.Value;
@@ -534,8 +539,9 @@ public abstract partial class SharedPhysicsSystem
             }
             else
             {
-                // TODO: pool the joint/error lists?
-                var data = new IslandData(islandIndex++, false, bodies, contacts, joints, new List<(Joint Joint, float Error)>())
+                // CMU14: each island owns its broken-joint scratch until all solver jobs complete.
+                var data = new IslandData(islandIndex++, false, bodies, contacts, joints,
+                    _islandBrokenJointPool.Get())
                 {
                     MapUid = mapUid.Value
                 };
@@ -555,6 +561,14 @@ public abstract partial class SharedPhysicsSystem
                 }
 
                 body.IslandIndex[idx] = i;
+            }
+
+            // CMU14: the lone island retained the body, not these temporary one-body lists.
+            if (lone)
+            {
+                _islandBodyPool.Return(bodies);
+                _islandContactPool.Return(contacts);
+                _islandJointPool.Return(joints);
             }
         }
 
@@ -593,7 +607,7 @@ public abstract partial class SharedPhysicsSystem
         }
 
         _islandJointPool.Return(island.Joints);
-        island.BrokenJoints.Clear();
+        _islandBrokenJointPool.Return(island.BrokenJoints); // CMU14
     }
 
     protected virtual void Cleanup(float frameTime)

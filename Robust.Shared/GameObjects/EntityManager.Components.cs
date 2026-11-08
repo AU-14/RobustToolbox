@@ -529,21 +529,9 @@ namespace Robust.Shared.GameObjects
             return component.LifeStage >= ComponentLifeStage.Stopping || _deleteSet.Contains(component);
         }
 
-        private static IEnumerable<IComponent> InSafeOrder(IEnumerable<IComponent> comps, bool forCreation = false)
-        {
-            static int Sequence(IComponent x)
-                => x switch
-                {
-                    MetaDataComponent _ => 0,
-                    TransformComponent _ => 1,
-                    PhysicsComponent _ => 2,
-                    _ => int.MaxValue
-                };
-
-            return forCreation
-                ? comps.OrderBy(Sequence)
-                : comps.OrderByDescending(Sequence);
-        }
+        // CMU14 method: preserve stable shutdown order without allocating sort buffers for every entity.
+        private static CMUComponentRemovalOrder InSafeOrder(HashSet<IComponent> comps, bool forCreation = false)
+            => new(comps, forCreation);
 
         /// <inheritdoc />
         public void RemoveComponents(EntityUid uid, MetaDataComponent? meta = null)

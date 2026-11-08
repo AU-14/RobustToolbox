@@ -138,7 +138,8 @@ internal sealed partial class PvsSystem
         // game state, in lieu of sending the required PVS leave messages.
         foreach (var session in PlayerData.Values)
         {
-            session.DataMemory.Clear();
+            // CMU14: ForceFullState already clears this storage after retiring its history.
+            // session.DataMemory.Clear();
             ForceFullState(session);
         }
 
