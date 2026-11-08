@@ -538,7 +538,8 @@ namespace Robust.Server
         {
             if (_mainLoop == null)
             {
-                _mainLoop = new GameLoop(
+                // CMU14 Begin: drain received messages before each additional catch-up tick.
+                var loop = new GameLoop(
                     _time,
                     _runtimeLog,
                     _prof,
@@ -549,6 +550,9 @@ namespace Robust.Server
                     DetectSoftLock = true,
                     EnableMetrics = true
                 };
+                loop.BeforeCatchUpTick += _network.ProcessPackets;
+                _mainLoop = loop;
+                // CMU14 End
             }
 
             _uptimeStopwatch.Start();
