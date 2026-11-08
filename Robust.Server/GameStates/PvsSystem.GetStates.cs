@@ -22,6 +22,12 @@ internal sealed partial class PvsSystem
     /// <param name="meta">The entity's metadata component</param>
     /// <returns>New entity State for the given entity.</returns>
     private EntityState GetEntityState(ICommonSession? player, EntityUid entityUid, GameTick fromTick, MetaDataComponent meta)
+        // CMU14: entering entities still need a state even when there are no visible component changes.
+        => TryGetEntityState(player, entityUid, fromTick, meta, includeEmpty: true)!;
+
+    // CMU14 method: established entities may have only changes hidden from this recipient.
+    private EntityState? TryGetEntityState(ICommonSession? player, EntityUid entityUid, GameTick fromTick,
+        MetaDataComponent meta, bool includeEmpty = false)
     {
         // CMU14: established entities usually change only a few components. Avoid
         // allocating a full-component array when the shared list pool is exhausted.
@@ -84,6 +90,15 @@ internal sealed partial class PvsSystem
 
         DebugTools.Assert(meta.EntityLastModifiedTick >= meta.LastComponentRemoved);
         DebugTools.Assert(GetEntity(meta.NetEntity) == entityUid);
+
+        // CMU14: discard the empty change list before allocating an entity-state wrapper.
+        // A component-removal list, including an empty one, must still reach the client.
+        if (!includeEmpty && changed.Count == 0 && netComps == null)
+        {
+            _componentChangeListPool.Return(changed);
+            return null;
+        }
+
         var entState = new EntityState(meta.NetEntity, changed, meta.EntityLastModifiedTick, netComps);
 
         return entState;
@@ -245,11 +260,10 @@ Transform last modified: {Transform(uid).LastModifiedTick}");
                     DebugTools.Assert(md.EntityLastModifiedTick >= md.CreationTick, $"Entity {ToPrettyString(uid)} last modified tick is less than creation tick");
                     DebugTools.Assert(md.EntityLastModifiedTick > fromTick, $"Entity {ToPrettyString(uid)} last modified tick is less than from tick");
 
-                    var state = GetEntityState(session, uid, fromTick, md);
-                    if (!state.Empty)
+                    // CMU14: only recipient-visible changes need an entity-state wrapper.
+                    var state = TryGetEntityState(session, uid, fromTick, md);
+                    if (state != null)
                         AddOrderedState(pvsSession, state, md, ref chunkStates);
-                    else
-                        ReturnEntityState(state);
                 }
             }
         }

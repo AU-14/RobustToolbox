@@ -135,9 +135,11 @@ internal sealed partial class PvsSystem
         else if (!session.PreviouslySent.TryGetValue(ackedTick, out ackedEnts))
             return;
 
+        // CMU14: ACK history only references slots already committed before this worker starts.
+        var sessionData = session.DataMemory.GetSpan();
         foreach (ref var intPtr in CollectionsMarshal.AsSpan(ackedEnts))
         {
-            ref var data = ref session.DataMemory.GetRef(intPtr.Index);
+            ref var data = ref sessionData[intPtr.Index]; // CMU14
             DebugTools.AssertNotEqual(data.LastSeen, GameTick.Zero);
             DebugTools.Assert(data.LastSeen >= ackedTick); // LastSent may equal ackedTick if the packet was sent reliably.
             data.EntityLastAcked = ackedTick;
