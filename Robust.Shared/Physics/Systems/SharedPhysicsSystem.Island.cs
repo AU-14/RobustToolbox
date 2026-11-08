@@ -683,6 +683,9 @@ public abstract partial class SharedPhysicsSystem
         _solveIslandsJob.Data = data;
         _solveIslandsJob.Prediction = prediction;
 
+        // CMU14: cap queue overhead while retaining at least two batches per processor for load balancing.
+        _solveIslandsJob.BatchSize = Math.Min(IslandBatchSize, Math.Max(1, islands.Length / (Environment.ProcessorCount * 2)));
+
         _parallel.ProcessNow(_solveIslandsJob, islands.Length);
 
         // Update data sequentially
@@ -695,6 +698,9 @@ public abstract partial class SharedPhysicsSystem
         }
     }
 
+    // CMU14: server scheduling can batch independent islands without changing client prediction scheduling.
+    protected virtual int IslandBatchSize => 1;
+
     private sealed class SolveIslandsJob : IParallelRobustJob
     {
         public SharedPhysicsSystem System = default!;
@@ -706,7 +712,7 @@ public abstract partial class SharedPhysicsSystem
         public float[] AngularVelocities = Array.Empty<float>();
         public bool[] SleepStatus = Array.Empty<bool>();
 
-        public int BatchSize => 1;
+        public int BatchSize { get; set; } = 1; // CMU14: computed once before queuing the solve.
         public int MinimumBatchParallel => 1;
 
         public void EnsureCapacity(int bodyCount)
