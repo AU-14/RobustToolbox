@@ -29,9 +29,9 @@ internal sealed partial class PvsSystem
     private EntityState? TryGetEntityState(ICommonSession? player, EntityUid entityUid, GameTick fromTick,
         MetaDataComponent meta, bool includeEmpty = false)
     {
-        // CMU14: established entities usually change only a few components. Avoid
-        // allocating a full-component array when the shared list pool is exhausted.
-        var changed = GetComponentChangeList(fromTick <= meta.CreationTick ? meta.NetComponents.Count : 0);
+        // CMU14: dirty entities may have no changes visible to this recipient.
+        // Rent a buffer only after finding a component that will actually be sent.
+        List<ComponentChange>? changed = null;
 
         bool sendCompList = meta.LastComponentRemoved > fromTick;
         HashSet<ushort>? netComps = sendCompList ? GetNetComponentSet() : null;
@@ -76,6 +76,8 @@ internal sealed partial class PvsSystem
             if (excludeReplays && player == null)
                 continue;
 
+            // CMU14: established entities usually change only a few components.
+            changed ??= GetComponentChangeList(fromTick <= meta.CreationTick ? meta.NetComponents.Count : 0);
             changed.Add(new ComponentChange(netId, state, component.LastModifiedTick));
 
             if (state != null)
@@ -91,14 +93,12 @@ internal sealed partial class PvsSystem
         DebugTools.Assert(meta.EntityLastModifiedTick >= meta.LastComponentRemoved);
         DebugTools.Assert(GetEntity(meta.NetEntity) == entityUid);
 
-        // CMU14: discard the empty change list before allocating an entity-state wrapper.
+        // CMU14: no state wrapper is needed when all changes are hidden from this recipient.
         // A component-removal list, including an empty one, must still reach the client.
-        if (!includeEmpty && changed.Count == 0 && netComps == null)
-        {
-            _componentChangeListPool.Return(changed);
+        if (!includeEmpty && changed == null && netComps == null)
             return null;
-        }
 
+        changed ??= GetComponentChangeList(0); // CMU14: retain empty entry/removal states and their wire representation.
         var entState = new EntityState(meta.NetEntity, changed, meta.EntityLastModifiedTick, netComps);
 
         return entState;

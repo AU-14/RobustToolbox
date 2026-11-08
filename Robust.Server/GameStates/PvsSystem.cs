@@ -182,6 +182,7 @@ internal sealed partial class PvsSystem : EntitySystem
 
         ClearPvsData();
         ShutdownDirty();
+        _componentChangeLists.Dispose(); // CMU14: release worker caches when this world shuts down.
         _getStateHandlers = null;
     }
 
