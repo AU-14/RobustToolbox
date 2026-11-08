@@ -282,6 +282,8 @@ namespace Robust.Server
 
             try
             {
+                // CMU14: absorb input/ACK bursts on servers while preserving explicit config and command-line values.
+                _config.OverrideDefault(CVars.NetReceiveBufferSize, 4 * 1024 * 1024);
                 _network.Initialize(true);
                 _network.StartServer();
             }
