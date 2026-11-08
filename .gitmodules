@@ -1,6 +1,7 @@
 [submodule "Lidgren.Network"]
 	path = Lidgren.Network/Lidgren.Network
-	url = https://github.com/space-wizards/lidgren-network-gen3.git
+	# CMU14: compatible receive interleaving on the deployed Lidgren revision.
+	url = https://github.com/AU-14/SpaceWizards.Lidgren.Network.git
 [submodule "XamlX"]
 	path = XamlX
 	url = https://github.com/space-wizards/XamlX

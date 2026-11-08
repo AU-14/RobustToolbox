@@ -98,6 +98,15 @@ namespace Robust.Shared
         public static readonly CVarDef<int> NetReceiveBufferSize =
             CVarDef.Create("net.receivebuffersize", 131071, CVar.ARCHIVE);
 
+        // CMU14 Begin
+        /// <summary>
+        /// Sent-packet interval for nonblocking receive checks between completed server connection heartbeats.
+        /// Zero disables interleaving. Does not change the heartbeat's total receive budget. Applied at socket creation.
+        /// </summary>
+        public static readonly CVarDef<int> NetReceiveInterleavePackets =
+            CVarDef.Create("net.receive_interleave_packets", 32, CVar.ARCHIVE | CVar.SERVERONLY);
+        // CMU14 End
+
         /// <summary>
         /// Size of the pool for Lidgren's array buffers to send messages.
         /// Set to 0 to disable pooling; max is 8192.

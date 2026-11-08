@@ -803,6 +803,8 @@ namespace Robust.Shared.Network
 
             if (IsServer)
             {
+                // CMU14: keep receiving inputs/ACKs during state-send bursts; clients retain the default schedule.
+                netConfig.ReceiveInterleavePacketInterval = Math.Max(0, _config.GetCVar(CVars.NetReceiveInterleavePackets));
                 netConfig.SetMessageTypeEnabled(NetIncomingMessageType.ConnectionApproval, true);
                 netConfig.MaximumConnections = _config.GetEffectiveMaxConnections();
             }
