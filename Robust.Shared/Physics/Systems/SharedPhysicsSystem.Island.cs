@@ -179,7 +179,8 @@ public abstract partial class SharedPhysicsSystem
     }
 
     // Caching for island generation.
-    private readonly HashSet<Entity<PhysicsComponent, TransformComponent>> _islandSet = new(64);
+    // CMU14: Island prevents repeat visits; only non-static bodies retain that flag until cleanup.
+    private readonly List<PhysicsComponent> _islandBodies = new(64);
     private readonly Stack<Entity<PhysicsComponent, TransformComponent>> _bodyStack = new(64);
     private readonly List<Entity<PhysicsComponent, TransformComponent>> _awakeBodyList = new(256);
     private readonly List<IslandData> _islands = new(MaxIslands);
@@ -333,7 +334,7 @@ public abstract partial class SharedPhysicsSystem
     {
         // Build and simulated islands from awake bodies.
         _bodyStack.EnsureCapacity(AwakeBodies.Count);
-        _islandSet.EnsureCapacity(AwakeBodies.Count);
+        _islandBodies.EnsureCapacity(AwakeBodies.Count); // CMU14
         _awakeBodyList.AddRange(AwakeBodies);
 
         var islandIndex = 0;
@@ -379,6 +380,18 @@ public abstract partial class SharedPhysicsSystem
                 continue;
             }
 
+            // CMU14: already-awake, unconnected bodies need no graph traversal or temporary island lists.
+            // Requiring Awake avoids bypassing wake callbacks that could add contacts or joints.
+            if (seed.Awake && seed.ContactCount == 0 &&
+                !JointQuery.HasComp(seedUid) && !RelayTargetQuery.HasComp(seedUid))
+            {
+                seed.Island = true;
+                _islandBodies.Add(seed);
+                loneIsland.MapUid = mapUid.Value;
+                loneIsland.Bodies.Add(ent);
+                continue;
+            }
+
             // Start of a new island
             var bodies = _islandBodyPool.Get();
             var contacts = _islandContactPool.Get();
@@ -394,10 +407,10 @@ public abstract partial class SharedPhysicsSystem
 
                 bodies.Add(bodyEnt);
 
-                _islandSet.Add(bodyEnt);
-
                 // Static bodies don't propagate islands
                 if (body.BodyType == BodyType.Static) continue;
+
+                _islandBodies.Add(body); // CMU14: the Island flag already guarantees one visit.
 
                 // As static bodies can never be awake (unlike Farseer) we'll set this after the check.
                 SetAwake(bodyEnt, true, updateSleepTime: false);
@@ -525,29 +538,27 @@ public abstract partial class SharedPhysicsSystem
                 }
             }
 
-            int idx;
-
             // Bodies not touching anything, hence we can just add it to the lone island.
-            // CMU14: return the unused lists after assigning indexes to the lone body.
+            // CMU14: an unconstrained body needs no solver index; return its temporary lists immediately.
             var lone = contacts.Count == 0 && joints.Count == 0;
             if (lone)
             {
                 DebugTools.Assert(bodies.Count == 1 && bodies[0].Comp1.BodyType != BodyType.Static);
                 loneIsland.MapUid = mapUid.Value;
                 loneIsland.Bodies.Add(bodies[0]);
-                idx = loneIsland.Index;
+                _islandBodyPool.Return(bodies);
+                _islandContactPool.Return(contacts);
+                _islandJointPool.Return(joints);
+                continue;
             }
-            else
+
+            // CMU14: each constrained island owns its indices and scratch until all solver jobs complete.
+            var data = new IslandData(islandIndex++, false, bodies, contacts, joints,
+                _islandBrokenJointPool.Get())
             {
-                // CMU14: each island owns its broken-joint scratch until all solver jobs complete.
-                var data = new IslandData(islandIndex++, false, bodies, contacts, joints,
-                    _islandBrokenJointPool.Get())
-                {
-                    MapUid = mapUid.Value
-                };
-                _islands.Add(data);
-                idx = data.Index;
-            }
+                MapUid = mapUid.Value
+            };
+            _islands.Add(data);
 
             // Allow static bodies to be re-used in other islands
             for (var i = 0; i < bodies.Count; i++)
@@ -560,15 +571,7 @@ public abstract partial class SharedPhysicsSystem
                     body.Island = false;
                 }
 
-                body.IslandIndex[idx] = i;
-            }
-
-            // CMU14: the lone island retained the body, not these temporary one-body lists.
-            if (lone)
-            {
-                _islandBodyPool.Return(bodies);
-                _islandContactPool.Return(contacts);
-                _islandJointPool.Return(joints);
+                body.IslandIndex[data.Index] = i; // CMU14
             }
         }
 
@@ -585,11 +588,15 @@ public abstract partial class SharedPhysicsSystem
 
     private void ReturnIsland(in IslandData island)
     {
-        foreach (var bodyEnt in island.Bodies)
+        // CMU14: only contacts and joints use per-island indices.
+        if (!island.LoneIsland)
         {
-            var body = bodyEnt.Comp1;
-            DebugTools.Assert(body.IslandIndex.ContainsKey(island.Index));
-            body.IslandIndex.Remove(island.Index);
+            foreach (var bodyEnt in island.Bodies)
+            {
+                var body = bodyEnt.Comp1;
+                DebugTools.Assert(body.IslandIndex.ContainsKey(island.Index));
+                body.IslandIndex.Remove(island.Index);
+            }
         }
 
         _islandBodyPool.Return(island.Bodies);
@@ -612,10 +619,9 @@ public abstract partial class SharedPhysicsSystem
 
     protected virtual void Cleanup(float frameTime)
     {
-        foreach (var bodyEnt in _islandSet)
+        // CMU14: non-static bodies are already unique, so cleanup needs no hash set.
+        foreach (var body in _islandBodies)
         {
-            var body = bodyEnt.Comp1;
-
             if (!body.Island || body.Deleted)
             {
                 continue;
@@ -627,7 +633,7 @@ public abstract partial class SharedPhysicsSystem
             // So Box2D would update broadphase here buutttt we'll just wait until MoveEvent queue is used.
         }
 
-        _islandSet.Clear();
+        _islandBodies.Clear(); // CMU14
         _bodyStack.Clear();
         _awakeBodyList.Clear();
     }
