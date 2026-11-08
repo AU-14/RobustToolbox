@@ -114,6 +114,7 @@ internal sealed partial class PvsSystem
         var ackedTick = session.LastReceivedAck;
         List<PvsIndex>? ackedEnts;
 
+        var returnToPool = false; // CMU14: Normal history remains owned by the session.
         if (session.Overflow != null && session.Overflow.Value.Tick <= ackedTick)
         {
             var (overflowTick, overflowEnts) = session.Overflow.Value;
@@ -128,6 +129,8 @@ internal sealed partial class PvsSystem
                 DebugTools.Assert(!session.PreviouslySent.Values.Contains(overflowEnts));
                 return;
             }
+
+            returnToPool = true; // CMU14: This matching overflow list has been evicted from history.
         }
         else if (!session.PreviouslySent.TryGetValue(ackedTick, out ackedEnts))
             return;
@@ -139,6 +142,10 @@ internal sealed partial class PvsSystem
             DebugTools.Assert(data.LastSeen >= ackedTick); // LastSent may equal ackedTick if the packet was sent reliably.
             data.EntityLastAcked = ackedTick;
         }
+
+        // CMU14: Normal history remains owned by the session; the retired overflow list has no remaining readers.
+        if (returnToPool)
+            _entDataListPool.Return(ackedEnts);
 
         // The client acked a tick. If they requested a full state, this ack happened some time after that, so we can safely set this to false
         session.RequestedFull = false;
