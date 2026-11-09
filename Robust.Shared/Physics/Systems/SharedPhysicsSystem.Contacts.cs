@@ -575,6 +575,10 @@ public abstract partial class SharedPhysicsSystem
         // Single-threaded so content doesn't need to worry about race conditions.
         for (var i = 0; i < index; i++)
         {
+            // CMU14: unchanged contacts have no event; avoid fetching their contact and world-point storage.
+            if (status[i] is ContactStatus.Touching or ContactStatus.NoContact)
+                continue;
+
             if (i >= contacts.Length)
             {
                 Log.Error($"Invalid contact length for contact events!");
@@ -721,8 +725,11 @@ public abstract partial class SharedPhysicsSystem
 
         var uidA = contact.EntityA;
         var uidB = contact.EntityB;
-        var bodyATransform = GetPhysicsTransform(uidA);
-        var bodyBTransform = GetPhysicsTransform(uidB);
+        // CMU14: contacts already retain the live transforms used by the validity pass.
+        // var bodyATransform = GetPhysicsTransform(uidA);
+        // var bodyBTransform = GetPhysicsTransform(uidB);
+        var bodyATransform = GetPhysicsTransform(uidA, contact.XformA);
+        var bodyBTransform = GetPhysicsTransform(uidB, contact.XformB);
 
         var contactStatus = contact.Update(bodyATransform, bodyBTransform, out wake[index]);
         status[index] = contactStatus;

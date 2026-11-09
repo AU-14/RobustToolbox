@@ -5,6 +5,7 @@ using System.Numerics;
 using System.Runtime.InteropServices;
 using Microsoft.Extensions.ObjectPool;
 using Robust.Shared.GameObjects;
+using Robust.Shared.Maths; // CMU14
 using Robust.Shared.Physics.Components;
 using Robust.Shared.Physics.Dynamics;
 using Robust.Shared.Physics.Dynamics.Contacts;
@@ -1011,6 +1012,11 @@ public abstract partial class SharedPhysicsSystem
 
     private void FinalisePositions(int start, int end, int offset, List<Entity<PhysicsComponent, TransformComponent>> bodies, Vector2[] positions, float[] angles, Vector2[] solvedPositions, float[] solvedAngles)
     {
+        // CMU14: transforms are read-only until all islands finish solving; siblings can reuse their parent transform.
+        EntityUid? cachedParent = null;
+        Angle parentRot = default;
+        Matrix3x2 parentInvMatrix = default;
+
         for (var i = start; i < end; i++)
         {
             var ent = bodies[i];
@@ -1022,10 +1028,19 @@ public abstract partial class SharedPhysicsSystem
             var xform = ent.Comp2;
             // TODO: Root cause out why this TryComp is necessary.
             // See https://github.com/space-wizards/RobustToolbox/pull/6135
-            if (!TryComp(xform.ParentUid, out TransformComponent? transform))
-                continue;
+            // CMU14 Begin
+            // if (!TryComp(xform.ParentUid, out TransformComponent? transform))
+            //     continue;
+            // var (_, parentRot, parentInvMatrix) = _transform.GetWorldPositionRotationInvMatrix(transform);
+            if (cachedParent != xform.ParentUid)
+            {
+                if (!TryComp(xform.ParentUid, out TransformComponent? transform))
+                    continue;
 
-            var (_, parentRot, parentInvMatrix) = _transform.GetWorldPositionRotationInvMatrix(transform);
+                (_, parentRot, parentInvMatrix) = _transform.GetWorldPositionRotationInvMatrix(transform);
+                cachedParent = xform.ParentUid;
+            }
+            // CMU14 End
             var worldRot = (float) (parentRot + xform._localRotation);
 
             var angle = angles[i];
