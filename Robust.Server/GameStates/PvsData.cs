@@ -132,6 +132,9 @@ internal sealed class PvsSession(ICommonSession session, ResizableMemoryRegion<P
     /// </summary>
     public MemoryStream? StateStream;
 
+    // CMU14: failed generation/serialization must not publish a partial state or PVS leaves.
+    public bool StateSerializationFailed;
+
     /// <summary>
     /// Whether we should force reliable sending of the <see cref="MsgState"/>.
     /// </summary>
