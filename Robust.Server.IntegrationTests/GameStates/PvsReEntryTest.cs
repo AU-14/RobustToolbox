@@ -68,6 +68,10 @@ public sealed class PvsReEntryTest : RobustIntegrationTest
 
             var playerUid = sEntMan.SpawnAttachedTo(null, coords);
             var entUid = sEntMan.SpawnAttachedTo(null, coords);
+            // CMU14: exercise a populated chunk while dropped states cause entities to leave and re-enter view.
+            for (var i = 0; i < 16; i++)
+                sEntMan.SpawnAttachedTo(null, coords);
+
             entity = sEntMan.GetNetEntity(entUid);
             player = sEntMan.GetNetEntity(playerUid);
 
