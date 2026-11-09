@@ -1054,10 +1054,6 @@ public abstract partial class SharedPhysicsSystem
         }
     }
 
-    /// <summary>
-    /// Updates the positions, rotations, and velocities of all of the solved bodies.
-    /// Run sequentially to avoid threading issues.
-    /// </summary>
     // CMU14: solver updates can change velocities, clear dynamics on sleep, and change collision on wake.
     // Reuse the field list across bodies/substeps instead of forcing an entire PhysicsComponent state.
     private static readonly string[] SolverStateFields =
@@ -1069,6 +1065,10 @@ public abstract partial class SharedPhysicsSystem
         nameof(PhysicsComponent.CanCollide),
     ];
 
+    /// <summary>
+    /// Updates the positions, rotations, and velocities of all of the solved bodies.
+    /// Run sequentially to avoid threading issues.
+    /// </summary>
     private void UpdateBodies(
         in IslandData island,
         Vector2[] positions,
