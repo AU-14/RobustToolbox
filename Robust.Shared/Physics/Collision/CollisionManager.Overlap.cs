@@ -23,6 +23,19 @@ internal sealed partial class CollisionManager
         where T : IPhysShape
         where U : IPhysShape
     {
+        // CMU14: circle sensors have one support point each, so no simplex search is needed.
+        if (shapeA is PhysShapeCircle circleA && shapeB is PhysShapeCircle circleB)
+        {
+            var pointA = Transform.Mul(xfA, circleA.Position);
+            var pointB = Transform.Mul(xfB, circleB.Position);
+            var distance = (pointA - pointB).Length();
+
+            // Keep DistanceManager's subtraction order and tolerance at the touching boundary.
+            // ignoreShapeSkin preserves circle radii, including in the generic path below.
+            return distance < float.Epsilon ||
+                   System.MathF.Max(0.0f, distance - circleA.Radius - circleB.Radius) < 10.0f * float.Epsilon;
+        }
+
         var input = new DistanceInput();
 
         input.ProxyA.Set(in shapeA, indexA);

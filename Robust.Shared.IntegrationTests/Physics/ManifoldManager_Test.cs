@@ -72,6 +72,36 @@ namespace Robust.UnitTesting.Shared.Physics
             Assert.That(_manifoldManager.TestOverlap(_polyA, 0, _polyB, 0, transformA, transformB), Is.EqualTo(true));
         }
 
+        // CMU14: circle sensor overlap must retain the deployed GJK touching boundary.
+        [TestCase(0.5f, 0.5f, 0.99999994f, true)]
+        [TestCase(0.5f, 0.5f, 1f, true)]
+        [TestCase(0.5f, 0.5f, 1.0000001f, false)]
+        [TestCase(0.1f, 0.2f, 0.3f, false)]
+        public void CircleOverlapPreservesTouchingBoundary(float radiusA, float radiusB, float distance, bool touching)
+        {
+            var a = new PhysShapeCircle(radiusA);
+            var b = new PhysShapeCircle(radiusB);
+            var transformA = new Transform(Vector2.Zero, 0f);
+            var transformB = new Transform(new Vector2(distance, 0), 0f);
+
+            Assert.That(_manifoldManager.TestOverlap(a, 0, b, 0, transformA, transformB), Is.EqualTo(touching));
+        }
+
+        // CMU14: local circle offsets rotate with the body, and circle radii are not optional shape skin.
+        [TestCase(false)]
+        [TestCase(true)]
+        public void CircleOverlapUsesTransformedCenters(bool ignoreShapeSkin)
+        {
+            var a = new PhysShapeCircle(0.25f, new Vector2(2, 0));
+            var b = new PhysShapeCircle(0.25f, new Vector2(-1, 0));
+            var transformA = new Transform(new Vector2(4, 0), System.MathF.PI / 2);
+            var transformB = new Transform(new Vector2(5.25f, 2), 0f);
+
+            Assert.That(_manifoldManager.TestOverlap(a, 0, b, 0, transformA, transformB, ignoreShapeSkin), Is.True);
+            transformB.Position.X += 0.5f;
+            Assert.That(_manifoldManager.TestOverlap(a, 0, b, 0, transformA, transformB, ignoreShapeSkin), Is.False);
+        }
+
         [Test]
         public void TestPolyOnPolyManifolds()
         {

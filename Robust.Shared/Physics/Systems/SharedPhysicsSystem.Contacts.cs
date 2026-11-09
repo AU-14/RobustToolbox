@@ -721,8 +721,11 @@ public abstract partial class SharedPhysicsSystem
 
         var uidA = contact.EntityA;
         var uidB = contact.EntityB;
-        var bodyATransform = GetPhysicsTransform(uidA);
-        var bodyBTransform = GetPhysicsTransform(uidB);
+        // CMU14: contacts already retain the live transforms used by the validity pass.
+        // var bodyATransform = GetPhysicsTransform(uidA);
+        // var bodyBTransform = GetPhysicsTransform(uidB);
+        var bodyATransform = GetPhysicsTransform(uidA, contact.XformA);
+        var bodyBTransform = GetPhysicsTransform(uidB, contact.XformB);
 
         var contactStatus = contact.Update(bodyATransform, bodyBTransform, out wake[index]);
         status[index] = contactStatus;
