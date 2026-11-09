@@ -263,6 +263,24 @@ public abstract partial class SharedMapSystem
 
     #region EntityUid
 
+    // CMU14: reject irrelevant grids before inverse transforms, chunk scans and fixture overlap tests.
+    /// <summary>
+    /// Runs an exact grid query with an early filter. Rejected grids are not tested for intersection.
+    /// The filter must not mutate the spatial index. Accepted grids retain the normal query order.
+    /// </summary>
+    public void FindGridsIntersectingFiltered<TState>(
+        EntityUid mapEnt,
+        Box2 worldAABB,
+        ref TState state,
+        GridCallback<TState> callback,
+        GridCallback<TState> filter,
+        bool includeMap = IncludeMap)
+    {
+        var shape = new SlimPolygon(worldAABB);
+        FindGridsIntersecting(mapEnt, shape, worldAABB, Robust.Shared.Physics.Transform.Empty, ref state, callback,
+            approx: false, includeMap: includeMap, filter: filter);
+    }
+
     /// <summary>
     /// Invokes the provided callback on every grid on the specified map which intersect the given region.
     /// </summary>
@@ -605,12 +623,14 @@ public abstract partial class SharedMapSystem
         ref TState state,
         GridCallback<TState> callback,
         bool approx,
-        bool includeMap) where TShape : IPhysShape
+        bool includeMap,
+        GridCallback<TState>? filter = null) where TShape : IPhysShape // CMU14
     {
         if (!_gridTreeQuery.TryGetComponent(mapEnt, out var gridTree))
             return;
 
-        if (includeMap && _gridQuery.TryGetComponent(mapEnt, out var mapGrid))
+        if (includeMap && _gridQuery.TryGetComponent(mapEnt, out var mapGrid) &&
+            (filter == null || filter(mapEnt, mapGrid, ref state))) // CMU14
         {
             callback(mapEnt, mapGrid, ref state);
         }
@@ -624,12 +644,24 @@ public abstract partial class SharedMapSystem
             gridTree.Tree,
             this,
             _transform,
-            approx);
+            approx,
+            filter); // CMU14
 
         gridTree.Tree.Query(ref gridState, static (ref GridQueryState<TShape, TState> state, DynamicTree.Proxy proxy) =>
         {
             // Even for approximate we'll check if any chunks roughly overlap.
             var data = state.Tree.GetUserData(proxy);
+
+            // CMU14: preserve tree traversal order while avoiding geometry work for rejected grids.
+            if (state.Filter != null)
+            {
+                var filterState = state.State;
+                var accepted = state.Filter(data.Uid, data.Grid, ref filterState);
+                state.State = filterState;
+                if (!accepted)
+                    return true;
+            }
+
             var gridInvMatrix = state.TransformSystem.GetInvWorldMatrix(data.Uid);
             var localAABB = gridInvMatrix.TransformBox(state.WorldAABB);
 
@@ -695,7 +727,8 @@ public abstract partial class SharedMapSystem
         B2DynamicTree<(EntityUid Uid, FixturesComponent Fixtures, MapGridComponent Grid)> Tree,
         SharedMapSystem MapSystem,
         SharedTransformSystem TransformSystem,
-        bool Approximate
+        bool Approximate,
+        GridCallback<TState>? Filter // CMU14
     ) where TShape : IPhysShape;
 }
 

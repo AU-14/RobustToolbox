@@ -16,6 +16,9 @@ namespace Robust.Server.GameObjects
     {
         [Dependency] private IConfigurationManager _configurationManager = default!;
 
+        // CMU14: amortize thread-pool dispatch for the server's many small independent islands.
+        protected override int IslandBatchSize => 4;
+
         public override void Initialize()
         {
             base.Initialize();

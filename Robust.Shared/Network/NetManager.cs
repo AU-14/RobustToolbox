@@ -523,6 +523,9 @@ namespace Robust.Shared.Network
                 var peer = IsServer ? (NetPeer) new NetServer(config) : new NetClient(config);
                 peer.Start();
                 _netPeers.Add(new NetPeerData(peer));
+                // CMU14: expose kernel clamping at startup; reported bytes use the operating system's accounting.
+                _logger.Info("UDP receive buffer: requested={RequestedBytes} reported={ReportedBytes} family={AddressFamily}",
+                    config.ReceiveBufferSize, peer.Socket!.ReceiveBufferSize, address.AddressFamily);
             }
 
             if (_netPeers.Count == 0)

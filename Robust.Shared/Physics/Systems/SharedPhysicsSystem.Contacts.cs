@@ -95,6 +95,7 @@ public abstract partial class SharedPhysicsSystem
     private ObjectPool<Contact> _contactPool = default!;
 
     private readonly LinkedList<Contact> _activeContacts = new();
+    private LinkedListNode<Contact>? _nextContact; // CMU14: kept live when callbacks remove pending contacts.
 
     private sealed class ContactPoolPolicy : IPooledObjectPolicy<Contact>
     {
@@ -376,6 +377,10 @@ public abstract partial class SharedPhysicsSystem
         next = node?.Next;
 
         // Remove from the world
+        // CMU14: advance before unlinking so collision callbacks cannot strand the active scan on a detached node.
+        if (_nextContact == contact.MapNode)
+            _nextContact = contact.MapNode.Next;
+
         _activeContacts.Remove(contact.MapNode);
 
         // Remove from body 1
@@ -404,12 +409,13 @@ public abstract partial class SharedPhysicsSystem
         // Can be changed while enumerating
         // TODO: check for null instead?
         // Work out which contacts are still valid before we decide to update manifolds.
-        var node = _activeContacts.First;
+        // CMU14: DestroyContact maintains this cursor through nested callback removals.
+        _nextContact = _activeContacts.First;
 
-        while (node != null)
+        while (_nextContact != null)
         {
-            var contact = node.Value;
-            node = node.Next;
+            var contact = _nextContact.Value;
+            _nextContact = _nextContact.Next;
 
             // It's possible the contact was destroyed by content in which case we just skip it.
             if (!contact.Enabled)
@@ -457,6 +463,10 @@ public abstract partial class SharedPhysicsSystem
 
                 // Clear the filtering flag.
                 contact.Flags &= ~ContactFlags.Filter;
+
+                // CMU14: filtering callbacks may also remove the contact currently being checked.
+                if (!contact.Enabled)
+                    continue;
             }
 
             bool activeA = bodyA.Awake && bodyA.BodyType != BodyType.Static;

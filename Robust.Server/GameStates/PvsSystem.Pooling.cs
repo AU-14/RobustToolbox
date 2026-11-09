@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Threading; // CMU14
 using Microsoft.Extensions.ObjectPool;
 using Robust.Shared.GameObjects;
 using Robust.Shared.GameStates;
@@ -20,8 +21,12 @@ internal sealed partial class PvsSystem
     private readonly ObjectPool<List<PvsIndex>> _entDataListPool
         = new DefaultObjectPool<List<PvsIndex>>(new ListPolicy<PvsIndex>(), MaxVisPoolSize);
 
-    private readonly ObjectPool<List<ComponentChange>> _componentChangeListPool
-        = new DefaultObjectPool<List<ComponentChange>>(new ListPolicy<ComponentChange>(), MaxVisPoolSize);
+    // CMU14 Begin: state generation and buffer return run on the same serialization worker.
+    // Retain small buffers locally so players do not contend for one global queue.
+    private const int MaxPooledComponentChangeCapacity = 64;
+    private readonly ThreadLocal<Stack<List<ComponentChange>>> _componentChangeLists
+        = new(static () => new());
+    // CMU14 End
 
     private readonly ObjectPool<HashSet<EntityUid>> _uidSetPool
         = new DefaultObjectPool<HashSet<EntityUid>>(new SetPolicy<EntityUid>(), MaxVisPoolSize);
@@ -71,11 +76,23 @@ internal sealed partial class PvsSystem
         }
     }
 
+    // CMU14 method: each worker has a bounded cache of cleared buffers, never component states.
     private List<ComponentChange> GetComponentChangeList(int capacity)
     {
-        var list = _componentChangeListPool.Get();
+        var pool = _componentChangeLists.Value!;
+        var list = pool.TryPop(out var cached) ? cached : new List<ComponentChange>();
         list.EnsureCapacity(capacity);
         return list;
+    }
+
+    // CMU14 method
+    private void ReturnComponentChangeList(List<ComponentChange> changes)
+    {
+        changes.Clear();
+        var pool = _componentChangeLists.Value!;
+        // Large initial/full-state buffers must not multiply retained memory by worker count.
+        if (pool.Count < MaxVisPoolSize && changes.Capacity <= MaxPooledComponentChangeCapacity)
+            pool.Push(changes);
     }
 
     private HashSet<ushort> GetNetComponentSet()
@@ -86,7 +103,7 @@ internal sealed partial class PvsSystem
     private void ReturnEntityState(EntityState state)
     {
         if (state.ComponentChanges.Value is List<ComponentChange> changes)
-            _componentChangeListPool.Return(changes);
+            ReturnComponentChangeList(changes); // CMU14
 
         if (state.NetComponents is { } netComps)
         {
