@@ -74,6 +74,10 @@ namespace Robust.Shared.Timing
         public event EventHandler<FrameEventArgs>? Update;
         public event EventHandler<FrameEventArgs>? Render;
 
+        // CMU14: servers drain queued messages between catch-up ticks without repeating
+        // frame-level callbacks. Clients leave this unsubscribed.
+        public event Action? BeforeCatchUpTick;
+
         /// <summary>
         ///     Enables single step mode. If this is enabled, after every tick the GameTime will pause.
         ///     Unpausing GameTime will run another single tick.
@@ -131,6 +135,30 @@ namespace Robust.Shared.Timing
             _sawmill = sawmill;
 
             _precisionSleep = options.Precise ? PrecisionSleep.Create() : new PrecisionSleepUniversal();
+        }
+
+        // CMU14 method: preserve the normal input phase's simulation context and exception policy.
+        private void ProcessCatchUpInput()
+        {
+            if (BeforeCatchUpTick == null)
+                return;
+
+            _timing.InSimulation = false;
+            try
+            {
+                using var input = _prof.Group("Catch-up input");
+                BeforeCatchUpTick.Invoke();
+            }
+#if EXCEPTION_TOLERANCE
+            catch (Exception exp)
+            {
+                _runtimeLog.LogException(exp, "GameLoop catch-up input");
+            }
+#endif
+            finally
+            {
+                _timing.InSimulation = true;
+            }
         }
 
         /// <summary>
@@ -218,6 +246,13 @@ namespace Robust.Shared.Timing
                         // only run the simulation if unpaused, but still use up the accumulated time
                         if (_timing.Paused)
                             continue;
+
+                        // CMU14 Begin: fresh input must not wait behind the rest of a catch-up frame.
+                        if (countTicksRan > 0)
+                            ProcessCatchUpInput();
+                        if (_timing.Paused)
+                            continue;
+                        // CMU14 End
 
                         _timing.TickRemainder = accumulator / _timing.TimeScale;
                         countTicksRan += 1;
