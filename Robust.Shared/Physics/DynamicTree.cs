@@ -263,10 +263,18 @@ namespace Robust.Shared.Physics
         private static readonly QueryCallbackDelegate<QueryCallbackDelegate> EasyQueryCallback =
             (ref QueryCallbackDelegate s, in T v) => s(v);
 
+        // CMU14 method: retain the original unbounded signature for existing callers.
         public void QueryRay<TState>(ref TState state, RayQueryCallbackDelegate<TState> callback, in Ray ray, bool approx = false)
         {
-            var tuple = (state, callback, _b2Tree, approx ? null : _extractAabb, ray);
-            _b2Tree.RayCast(ref tuple, DelegateCache<TState>.RayQueryState, ray);
+            QueryRay(ref state, callback, ray, float.PositiveInfinity, approx);
+        }
+
+        // CMU14 method: finite component-tree queries can prune before reaching distant leaves.
+        public void QueryRay<TState>(ref TState state, RayQueryCallbackDelegate<TState> callback,
+            in Ray ray, float maxLength, bool approx = false)
+        {
+            var tuple = (state, callback, _b2Tree, approx ? null : _extractAabb, ray, maxLength);
+            _b2Tree.RayCast(ref tuple, DelegateCache<TState>.RayQueryState, ray, maxLength);
             state = tuple.state;
         }
 
@@ -294,7 +302,8 @@ namespace Robust.Shared.Physics
             return !tuple.extract(item).Contains(tuple.point) || tuple.callback(ref tuple.state, item);
         }
 
-        private static bool RayQueryStateCallback<TState>(ref (TState state, RayQueryCallbackDelegate<TState> callback, B2DynamicTree<T> tree, ExtractAabbDelegate? extract, Ray srcRay) tuple, DynamicTree.Proxy proxy, in Vector2 hitPos, float distance)
+        // CMU14 method: precise bounds can lie beyond the endpoint even when the fat bounds intersect it.
+        private static bool RayQueryStateCallback<TState>(ref (TState state, RayQueryCallbackDelegate<TState> callback, B2DynamicTree<T> tree, ExtractAabbDelegate? extract, Ray srcRay, float maxLength) tuple, DynamicTree.Proxy proxy, in Vector2 hitPos, float distance)
         {
             var item = tuple.tree.GetUserData(proxy)!;
             var hit = hitPos;
@@ -302,7 +311,7 @@ namespace Robust.Shared.Physics
             if (tuple.extract != null)
             {
                 var precise = tuple.extract(item);
-                if (!tuple.srcRay.Intersects(precise, out distance, out hit))
+                if (!tuple.srcRay.Intersects(precise, out distance, out hit) || distance > tuple.maxLength)
                 {
                     return true;
                 }
@@ -380,7 +389,7 @@ namespace Robust.Shared.Physics
 
             public static readonly
                 B2DynamicTree<T>.RayQueryCallback<(TState state, RayQueryCallbackDelegate<TState> callback,
-                    B2DynamicTree<T> tree, ExtractAabbDelegate? extract, Ray srcRay)> RayQueryState =
+                    B2DynamicTree<T> tree, ExtractAabbDelegate? extract, Ray srcRay, float maxLength)> RayQueryState = // CMU14
                     RayQueryStateCallback;
         }
     }

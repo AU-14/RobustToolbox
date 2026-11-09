@@ -574,7 +574,7 @@ public abstract partial class ComponentTreeSystem<TTreeComp, TComp> : EntitySyst
             var (_, treeRot, matrix) = XformSystem.GetWorldPositionRotationInvMatrix(treeUid);
             var relativeAngle = new Angle(-treeRot.Theta).RotateVec(ray.Direction);
             var treeRay = new Ray(Vector2.Transform(ray.Position, matrix), relativeAngle);
-            comp.Tree.QueryRay(ref state, callback, treeRay);
+            comp.Tree.QueryRay(ref state, callback, treeRay, maxLength); // CMU14: bound traversal as well as accepted hits.
             if (state.Done)
                 return;
         }

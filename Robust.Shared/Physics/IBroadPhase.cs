@@ -1,4 +1,4 @@
-﻿using System.Collections.Generic;
+using System.Collections.Generic;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using Robust.Shared.Maths;
@@ -48,6 +48,13 @@ public interface IBroadPhase
     void QueryRay(
         DynamicTree<FixtureProxy>.RayQueryCallbackDelegate callback,
         in Ray ray,
+        bool approx = false);
+
+    // CMU14 method: preserve the unbounded API while allowing finite obstruction queries.
+    void QueryRay(
+        DynamicTree<FixtureProxy>.RayQueryCallbackDelegate callback,
+        in Ray ray,
+        float maxLength,
         bool approx = false);
 
     void QueryRay<TState>(
