@@ -575,6 +575,10 @@ public abstract partial class SharedPhysicsSystem
         // Single-threaded so content doesn't need to worry about race conditions.
         for (var i = 0; i < index; i++)
         {
+            // CMU14: unchanged contacts have no event; avoid fetching their contact and world-point storage.
+            if (status[i] is ContactStatus.Touching or ContactStatus.NoContact)
+                continue;
+
             if (i >= contacts.Length)
             {
                 Log.Error($"Invalid contact length for contact events!");
