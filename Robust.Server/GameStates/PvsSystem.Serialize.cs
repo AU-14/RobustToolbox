@@ -24,7 +24,18 @@ internal sealed partial class PvsSystem
         using var _ = Histogram.WithLabels("Serialize States").NewTimer();
         var opts = new ParallelOptions {MaxDegreeOfParallelism = _parallelMgr.ParallelProcessCount};
         _oldestAck = GameTick.MaxValue.Value;
-        Parallel.For(-1, _sessions.Length, opts, SerializeState);
+        // CMU14 Begin: component membership and dirty ticks are read-only until all serialization workers join.
+        _componentSelectionActive = _sessions.Length > 1;
+        try
+        {
+            Parallel.For(-1, _sessions.Length, opts, SerializeState);
+        }
+        finally
+        {
+            _componentSelectionActive = false;
+            ClearComponentSelections();
+        }
+        // CMU14 End
     }
 
     /// <summary>

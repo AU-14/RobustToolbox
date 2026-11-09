@@ -37,7 +37,8 @@ internal sealed partial class PvsSystem
         HashSet<ushort>? netComps = sendCompList ? GetNetComponentSet() : null;
         var stateEv = new ComponentGetState(player, fromTick);
 
-        foreach (var (netId, component) in meta.NetComponents)
+        // CMU14: reuse only the dirty-component selection, never recipient filtering or component states.
+        foreach (var (netId, component) in SelectStateComponents(meta, fromTick, sendCompList))
         {
             DebugTools.Assert(component.NetSyncEnabled);
 

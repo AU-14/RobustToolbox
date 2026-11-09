@@ -1,6 +1,7 @@
 using System;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Runtime.Intrinsics.X86; // CMU14
 using Robust.Shared.GameObjects;
 using Robust.Shared.Map.Components;
 using Robust.Shared.Timing;
@@ -26,7 +27,7 @@ internal sealed partial class PvsSystem
     /// <summary>
     /// Add all entities on a given PVS chunk to a clients game-state.
     /// </summary>
-    private void AddPvsChunk(PvsChunk chunk, float distance, PvsSession session)
+    private unsafe void AddPvsChunk(PvsChunk chunk, float distance, PvsSession session) // CMU14: native storage prefetch.
     {
         // Each root nodes should simply be a map or a grid entity.
         DebugTools.Assert(Exists(chunk.Root), $"Chunk root does not exist!");
@@ -61,13 +62,24 @@ internal sealed partial class PvsSystem
         // its checked spans once instead of looking up both memory regions per entity.
         var metadata = _metadataMemory.GetSpan();
         var sessionData = session.DataMemory.GetSpan();
-        foreach (ref var ent in span)
+        // CMU14 Begin: overlap sparse session-data cache misses with processing the current entity.
+        // Both native regions stay committed and immutable in size until state generation joins.
+        for (var i = 0; i < span.Length; i++)
         {
+            if (Sse.IsSupported && i + 8 < span.Length)
+            {
+                var next = span[i + 8].Ptr.Index;
+                Sse.Prefetch0(Unsafe.AsPointer(ref sessionData[next]));
+                Sse.Prefetch0(Unsafe.AsPointer(ref metadata[next]));
+            }
+
+            ref var ent = ref span[i];
             ref var meta = ref metadata[ent.Ptr.Index]; // CMU14
             meta.Validate(ent.Meta);
             if ((mask & meta.VisMask) == meta.VisMask)
                 AddEntity(session, ref ent, ref meta, ref sessionData[ent.Ptr.Index], fromTick, curTick); // CMU14
         }
+        // CMU14 End
     }
 
     // CMU14 method: overrides use the same path without a surrounding chunk tick snapshot.
