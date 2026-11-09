@@ -31,6 +31,10 @@ internal sealed partial class PvsSystem
 
     private void SendSessionState(PvsSession data, ZStdCompressionContext ctx, GameTick sendTick)
     {
+        // CMU14: neither partial output nor a synthetic reliable ACK may escape a failed state.
+        if (data.StateSerializationFailed)
+            return;
+
         // Ensure it gets disposed if any exceptions happen.
         using var stateStream = data.StateStream;
         data.StateStream = null;

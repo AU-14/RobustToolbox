@@ -70,18 +70,48 @@ internal sealed partial class PvsSystem
     /// </summary>
     private void SerializeSessionState(PvsSession data)
     {
-        var state = ComputeSessionState(data);
-        InterlockedHelper.Min(ref _oldestAck, data.FromTick.Value);
-        DebugTools.AssertEqual(data.StateStream, null);
-
-        // PVS benchmarks use dummy sessions.
-        // ReSharper disable once ConditionIsAlwaysTrueOrFalseAccordingToNullableAPIContract
-        if (data.Session.Channel is not DummyChannel)
+        // CMU14 Begin: clean up both generation and serialization failures before the send jobs run.
+        try
         {
-            data.StateStream = RobustMemoryManager.GetMemoryStream();
-            _serializer.SerializeDirect(data.StateStream, state);
-        }
+            var state = ComputeSessionState(data);
+            InterlockedHelper.Min(ref _oldestAck, data.FromTick.Value);
+            DebugTools.AssertEqual(data.StateStream, null);
 
-        ClearSessionState(data);
+            // PVS benchmarks use dummy sessions.
+            // ReSharper disable once ConditionIsAlwaysTrueOrFalseAccordingToNullableAPIContract
+            if (data.Session.Channel is not DummyChannel)
+            {
+                data.StateStream = RobustMemoryManager.GetMemoryStream();
+                _serializer.SerializeDirect(data.StateStream, state);
+            }
+            data.StateSerializationFailed = false;
+        }
+        catch
+        {
+            data.StateStream?.Dispose();
+            data.StateStream = null;
+            // Reset visibility once per failure episode. Retrying a persistent failure must not
+            // repeatedly clear the entire per-player entity buffer or acknowledge unsent data.
+            if (!data.StateSerializationFailed)
+            {
+                ClearSendHistory(data);
+                ClearPlayerPvsData(data);
+            }
+            data.StateSerializationFailed = true;
+            data.RequestedFull = true;
+            InterlockedHelper.Min(ref _oldestAck, data.LastReceivedAck.Value);
+            throw;
+        }
+        finally
+        {
+            // Generation can throw before transferring ownership of this list into send history.
+            if (data.ToSend != null)
+            {
+                _entDataListPool.Return(data.ToSend);
+                data.ToSend = null;
+            }
+            ClearSessionState(data);
+        }
+        // CMU14 End
     }
 }

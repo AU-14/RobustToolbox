@@ -40,6 +40,10 @@ internal sealed partial class PvsSystem
     /// </summary>
     private void ProcessLeavePvs(PvsSession session)
     {
+        // CMU14: a failed visibility pass is incomplete; retry a full state before sending leaves.
+        if (session.StateSerializationFailed)
+            return;
+
         if (session.DisableCulling || session.Session.Status != SessionStatus.InGame)
             return;
 
