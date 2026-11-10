@@ -2331,10 +2331,15 @@ namespace Robust.Shared.Physics
             RayCast(ref callback, EasyRayQueryCallback, input);
         }
 
+        // CMU14 method: retain the original unbounded signature for existing callers.
         public void RayCast<TState>(ref TState state, RayQueryCallback<TState> callback, in Ray input)
         {
-            // NOTE: This is not Box2D's normal ray cast function, since our rays have infinite length.
+            RayCast(ref state, callback, input, float.PositiveInfinity);
+        }
 
+        // CMU14 method: bounded rays can reject whole subtrees beyond their endpoint.
+        public void RayCast<TState>(ref TState state, RayQueryCallback<TState> callback, in Ray input, float maxLength)
+        {
             var stack = new GrowableStack<Proxy>(stackalloc Proxy[256]);
 
             stack.Push(_root);
@@ -2351,7 +2356,7 @@ namespace Robust.Shared.Physics
 
                 ref var node = ref Unsafe.Add(ref baseRef, proxy);
 
-                if (!input.Intersects(node.Aabb, out var dist, out var hit))
+                if (!input.Intersects(node.Aabb, out var dist, out var hit) || dist > maxLength)
                 {
                     continue;
                 }

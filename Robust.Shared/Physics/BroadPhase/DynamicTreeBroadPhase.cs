@@ -125,10 +125,18 @@ public sealed class DynamicTreeBroadPhase : IBroadPhase
     private static readonly DynamicTree<FixtureProxy>.QueryCallbackDelegate<DynamicTree<FixtureProxy>.QueryCallbackDelegate> EasyQueryCallback =
         (ref DynamicTree<FixtureProxy>.QueryCallbackDelegate s, in FixtureProxy v) => s(v);
 
+    // CMU14 method: retain the original unbounded signature for existing callers.
     public void QueryRay<TState>(ref TState state, DynamicTree<FixtureProxy>.RayQueryCallbackDelegate<TState> callback, in Ray ray, bool approx = false)
     {
-        var tuple = (state, callback, _tree, approx ? null : _extractAabb, ray);
-        _tree.RayCast(ref tuple, DelegateCache<TState>.RayQueryState, ray);
+        QueryRay(ref state, callback, ray, float.PositiveInfinity, approx);
+    }
+
+    // CMU14 method: the tree clips fat bounds, and the callback clips the precise fixture bounds.
+    private void QueryRay<TState>(ref TState state, DynamicTree<FixtureProxy>.RayQueryCallbackDelegate<TState> callback,
+        in Ray ray, float maxLength, bool approx)
+    {
+        var tuple = (state, callback, _tree, approx ? null : _extractAabb, ray, maxLength);
+        _tree.RayCast(ref tuple, DelegateCache<TState>.RayQueryState, ray, maxLength);
         state = tuple.state;
     }
 
@@ -157,7 +165,8 @@ public sealed class DynamicTreeBroadPhase : IBroadPhase
         return tuple.callback(ref tuple.state, item);
     }
 
-    private static bool RayQueryStateCallback<TState>(ref (TState state, DynamicTree<FixtureProxy>.RayQueryCallbackDelegate<TState> callback, B2DynamicTree<FixtureProxy> tree, DynamicTree<FixtureProxy>.ExtractAabbDelegate? extract, Ray srcRay) tuple, DynamicTree.Proxy proxy, in Vector2 hitPos, float distance)
+    // CMU14 method: carry the endpoint through the precise AABB check as well as the tree traversal.
+    private static bool RayQueryStateCallback<TState>(ref (TState state, DynamicTree<FixtureProxy>.RayQueryCallbackDelegate<TState> callback, B2DynamicTree<FixtureProxy> tree, DynamicTree<FixtureProxy>.ExtractAabbDelegate? extract, Ray srcRay, float maxLength) tuple, DynamicTree.Proxy proxy, in Vector2 hitPos, float distance)
     {
         var item = tuple.tree.GetUserData(proxy)!;
         var hit = hitPos;
@@ -165,7 +174,7 @@ public sealed class DynamicTreeBroadPhase : IBroadPhase
         if (tuple.extract != null)
         {
             var precise = tuple.extract(item);
-            if (!tuple.srcRay.Intersects(precise, out distance, out hit))
+            if (!tuple.srcRay.Intersects(precise, out distance, out hit) || distance > tuple.maxLength)
             {
                 return true;
             }
@@ -177,6 +186,12 @@ public sealed class DynamicTreeBroadPhase : IBroadPhase
     public void QueryRay(DynamicTree<FixtureProxy>.RayQueryCallbackDelegate callback, in Ray ray, bool approx = false)
     {
         QueryRay(ref callback, RayQueryDelegateCallbackInst, ray, approx);
+    }
+
+    // CMU14 method
+    public void QueryRay(DynamicTree<FixtureProxy>.RayQueryCallbackDelegate callback, in Ray ray, float maxLength, bool approx = false)
+    {
+        QueryRay(ref callback, RayQueryDelegateCallbackInst, ray, maxLength, approx);
     }
 
     private static readonly DynamicTree<FixtureProxy>.RayQueryCallbackDelegate<DynamicTree<FixtureProxy>.RayQueryCallbackDelegate> RayQueryDelegateCallbackInst = RayQueryDelegateCallback;
@@ -194,7 +209,7 @@ public sealed class DynamicTreeBroadPhase : IBroadPhase
 
         public static readonly
             B2DynamicTree<FixtureProxy>.RayQueryCallback<(TState state, DynamicTree<FixtureProxy>.RayQueryCallbackDelegate<TState> callback,
-                B2DynamicTree<FixtureProxy> tree, DynamicTree<FixtureProxy>.ExtractAabbDelegate? extract, Ray srcRay)> RayQueryState =
+                B2DynamicTree<FixtureProxy> tree, DynamicTree<FixtureProxy>.ExtractAabbDelegate? extract, Ray srcRay, float maxLength)> RayQueryState = // CMU14
                 RayQueryStateCallback;
     }
 }

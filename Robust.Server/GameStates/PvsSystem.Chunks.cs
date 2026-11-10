@@ -25,6 +25,14 @@ internal sealed partial class PvsSystem
     private readonly List<PvsChunk> _dirtyChunks = new(64);
     private readonly List<PvsChunk> _cleanChunks = new(64);
 
+    // CMU14 Begin: reuse identical map/grid searches only within one visibility pass.
+    private const int MaxVisibleChunkRegions = 16;
+    private const int MaxCachedRegionChunks = 256;
+    private readonly Dictionary<(EntityUid Root, Vector2i Lower, Vector2i Upper), List<PvsChunk>> _visibleChunkRegions = new();
+    private readonly List<List<PvsChunk>> _visibleChunkLists = new();
+    private bool _cacheVisibleChunkRegions;
+    // CMU14 End
+
     /// <summary>
     /// Lookup of every chunk entity uid to its corresponding pvschunklocation.
     /// </summary>
@@ -93,17 +101,29 @@ internal sealed partial class PvsSystem
         DebugTools.Assert(!_chunks.Values.Any(x=> x.UpdateQueued));
         _dirtyChunks.Clear();
         _cleanChunks.Clear();
-        foreach (var session in _sessions)
+        // CMU14 Begin: cached chunks must not survive entity/grid changes between ticks.
+        _cacheVisibleChunkRegions = _sessions.Length > 1;
+        try
         {
-            session.Chunks.Clear();
-            session.ChunkSet.Clear();
-            GetSessionViewers(session);
-
-            foreach (var eye in session.Viewers)
+            foreach (var session in _sessions)
             {
-                GetVisibleChunks(eye, session.ChunkSet);
+                session.Chunks.Clear();
+                session.ChunkSet.Clear();
+                GetSessionViewers(session);
+
+                foreach (var eye in session.Viewers)
+                {
+                    GetVisibleChunks(eye, session.ChunkSet);
+                }
             }
         }
+        finally
+        {
+            foreach (var list in _visibleChunkRegions.Values)
+                list.Clear();
+            _visibleChunkRegions.Clear();
+        }
+        // CMU14 End
         DebugTools.Assert(_dirtyChunks.ToHashSet().Count == _dirtyChunks.Count);
         DebugTools.Assert(_cleanChunks.ToHashSet().Count == _cleanChunks.Count);
     }
@@ -111,6 +131,7 @@ internal sealed partial class PvsSystem
     /// <summary>
     /// Get the chunks visible to a single entity and add them to a player's set of visible chunks.
     /// </summary>
+    // CMU14: share exact chunk searches while keeping each viewer's grid intersection and bounds.
     private void GetVisibleChunks(Entity<TransformComponent, EyeComponent?> eye,
         HashSet<PvsChunk> chunks)
     {
@@ -118,23 +139,7 @@ internal sealed partial class PvsSystem
         if (mapUid is not {} map)
             return;
 
-        var mapChunkEnumerator = new ChunkIndicesEnumerator(viewPos, range, ChunkSize);
-        while (mapChunkEnumerator.MoveNext(out var chunkIndices))
-        {
-            var loc = new PvsChunkLocation(map, chunkIndices.Value);
-            if (!_chunks.TryGetValue(loc, out var chunk))
-                continue;
-
-            chunks.Add(chunk);
-            if (chunk.UpdateQueued)
-                continue;
-
-            chunk.UpdateQueued = true;
-            if (chunk.Dirty)
-                _dirtyChunks.Add(chunk);
-            else
-                _cleanChunks.Add(chunk);
-        }
+        AddVisibleChunks(map, viewPos, range, chunks);
 
         _grids.Clear();
         var rangeVec = new Vector2(range, range);
@@ -144,23 +149,63 @@ internal sealed partial class PvsSystem
         foreach (var (grid, _) in _grids)
         {
             var localPos = Vector2.Transform(viewPos, _transform.GetInvWorldMatrix(grid));
-            var gridChunkEnumerator = new ChunkIndicesEnumerator(localPos, range, ChunkSize);
-            while (gridChunkEnumerator.MoveNext(out var gridChunkIndices))
+            AddVisibleChunks(grid, localPos, range, chunks);
+        }
+    }
+
+    // CMU14: preserve the enumerator's inclusive bounds and order, including empty regions.
+    private void AddVisibleChunks(EntityUid root, Vector2 position, float range, HashSet<PvsChunk> chunks)
+    {
+        List<PvsChunk>? cached = null;
+        if (_cacheVisibleChunkRegions)
+        {
+            var rangeVec = new Vector2(range, range);
+            var lower = ((position - rangeVec) / ChunkSize).Floored();
+            var upper = ((position + rangeVec) / ChunkSize).Floored();
+            var key = (root, lower, upper);
+            if (_visibleChunkRegions.TryGetValue(key, out cached))
             {
-                var loc = new PvsChunkLocation(grid, gridChunkIndices.Value);
-                if (!_chunks.TryGetValue(loc, out var chunk))
-                    continue;
-
-                chunks.Add(chunk);
-                if (chunk.UpdateQueued)
-                    continue;
-
-                chunk.UpdateQueued = true;
-                if (chunk.Dirty)
-                    _dirtyChunks.Add(chunk);
-                else
-                    _cleanChunks.Add(chunk);
+                foreach (var chunk in cached)
+                    chunks.Add(chunk);
+                return;
             }
+
+            // Bound retained scratch storage even with many remote eyes or unusually large view ranges.
+            var width = (long) upper.X - lower.X + 1;
+            var height = (long) upper.Y - lower.Y + 1;
+            if (_visibleChunkRegions.Count < MaxVisibleChunkRegions &&
+                width > 0 && height > 0 && width <= MaxCachedRegionChunks &&
+                height <= MaxCachedRegionChunks && width * height <= MaxCachedRegionChunks)
+            {
+                var index = _visibleChunkRegions.Count;
+                if (index == _visibleChunkLists.Count)
+                    _visibleChunkLists.Add(new List<PvsChunk>());
+                cached = _visibleChunkLists[index];
+                _visibleChunkRegions.Add(key, cached);
+            }
+            else
+            {
+                // Dispersed viewers should not pay cache lookup costs for the rest of this pass.
+                _cacheVisibleChunkRegions = false;
+            }
+        }
+
+        var enumerator = new ChunkIndicesEnumerator(position, range, ChunkSize);
+        while (enumerator.MoveNext(out var indices))
+        {
+            if (!_chunks.TryGetValue(new PvsChunkLocation(root, indices.Value), out var chunk))
+                continue;
+
+            cached?.Add(chunk);
+            chunks.Add(chunk);
+            if (chunk.UpdateQueued)
+                continue;
+
+            chunk.UpdateQueued = true;
+            if (chunk.Dirty)
+                _dirtyChunks.Add(chunk);
+            else
+                _cleanChunks.Add(chunk);
         }
     }
 

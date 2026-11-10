@@ -341,7 +341,7 @@ namespace Robust.Shared.Physics.Systems
 #endif
                             return !returnOnFirstHit; // CMU14: stop traversing this tree after accepting the first hit.
                         },
-                        gridRay);
+                        gridRay, maxLength); // CMU14: prune nodes beyond the query endpoint, not only leaf results.
 
                     if (returnOnFirstHit && results.Count > 0) // CMU14: skip the dynamic tree after a static hit.
                         return;
@@ -380,7 +380,7 @@ namespace Robust.Shared.Physics.Systems
 #endif
                             return !returnOnFirstHit; // CMU14: stop traversing this tree after accepting the first hit.
                         },
-                        gridRay);
+                        gridRay, maxLength); // CMU14: prune nodes beyond the query endpoint, not only leaf results.
                 });
 
 #if DEBUG

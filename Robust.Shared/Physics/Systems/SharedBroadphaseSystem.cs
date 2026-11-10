@@ -36,6 +36,8 @@ namespace Robust.Shared.Physics.Systems
 
         private float _frameTime;
 
+        private int _smallMoveBufferPasses; // CMU14: avoid retaining map-load capacity for every subsequent contact pass.
+
         /*
          * Okay so Box2D has its own "MoveProxy" stuff so you can easily find new contacts when required.
          * Our problem is that we have nested broadphases (rather than being on separate maps) which makes this
@@ -245,7 +247,25 @@ namespace Robust.Shared.Physics.Systems
                 _physicsSystem.AddPair(proxyA.FixtureId, proxyB.FixtureId, proxyA, proxyB, flags: contactFlags);
             }
 
+            // CMU14 Begin: HashSet.Clear clears every bucket, including capacity retained after map loads.
+            // Compact only after sustained low usage, with headroom for normal movement bursts. The set is
+            // empty here and all contact workers have finished, so active proxy iteration order is unchanged.
+            var moveCount = moveBuffer.Count;
             moveBuffer.Clear();
+            var capacity = moveBuffer.EnsureCapacity(0);
+            if (capacity > 8192 && moveCount < capacity / 8)
+            {
+                if (++_smallMoveBufferPasses >= 120)
+                {
+                    moveBuffer.TrimExcess(Math.Max(4096, moveCount * 2));
+                    _smallMoveBufferPasses = 0;
+                }
+            }
+            else
+            {
+                _smallMoveBufferPasses = 0;
+            }
+            // CMU14 End
             movedGrids.Clear();
         }
 
