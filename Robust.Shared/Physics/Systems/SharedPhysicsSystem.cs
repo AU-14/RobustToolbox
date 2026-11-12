@@ -234,6 +234,7 @@ namespace Robust.Shared.Physics.Systems
             base.Shutdown();
 
             ShutdownContacts();
+            _cmuSolverScratch.Dispose(); // CMU14: no solver workers remain when the system shuts down.
         }
 
         private void HandleContainerRemoved(EntityUid uid, PhysicsComponent physics, EntGotRemovedFromContainerMessage message)

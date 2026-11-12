@@ -128,27 +128,32 @@ public abstract partial class SharedPhysicsSystem
     private const int MaxIslands = 256;
 
     private readonly ObjectPool<List<Entity<PhysicsComponent, TransformComponent>>> _islandBodyPool =
-        new DefaultObjectPool<List<Entity<PhysicsComponent, TransformComponent>>>(new ListPolicy<Entity<PhysicsComponent, TransformComponent>>(), MaxIslands);
+        // new DefaultObjectPool<List<Entity<PhysicsComponent, TransformComponent>>>(new ListPolicy<Entity<PhysicsComponent, TransformComponent>>(), MaxIslands);
+        new CMUIslandListPool<Entity<PhysicsComponent, TransformComponent>>(); // CMU14: simulation-thread ownership, observed peak capacity.
 
     private readonly ObjectPool<List<Contact>> _islandContactPool =
-        new DefaultObjectPool<List<Contact>>(new ListPolicy<Contact>(), MaxIslands);
+        // new DefaultObjectPool<List<Contact>>(new ListPolicy<Contact>(), MaxIslands);
+        new CMUIslandListPool<Contact>(); // CMU14
 
     /// <summary>
     /// Due to joint relays we need to track the dummy joint and the original joint.
     /// </summary>
-    private readonly ObjectPool<List<(Joint Original, Joint Joint)>> _islandJointPool =
-        new DefaultObjectPool<List<(Joint Original, Joint Joint)>>(new ListPolicy<(Joint Original, Joint Joint)>(), MaxIslands);
+    // CMU14 Begin: retain resolved endpoints with each borrowed joint list.
+    // private readonly ObjectPool<List<(Joint Original, Joint Joint)>> _islandJointPool =
+    //     new DefaultObjectPool<List<(Joint Original, Joint Joint)>>(new ListPolicy<(Joint Original, Joint Joint)>(), MaxIslands);
+    private readonly ObjectPool<List<CMUSolverJoint>> _islandJointPool = new CMUIslandListPool<CMUSolverJoint>();
+    // CMU14 End
 
     // CMU14: broken-joint scratch belongs to an island for the same lifetime as its other lists.
     private readonly ObjectPool<List<(Joint Joint, float Error)>> _islandBrokenJointPool =
-        new DefaultObjectPool<List<(Joint Joint, float Error)>>(new ListPolicy<(Joint Joint, float Error)>(), MaxIslands);
+        new CMUIslandListPool<(Joint Joint, float Error)>();
 
     internal record struct IslandData(
         int Index,
         bool LoneIsland,
         List<Entity<PhysicsComponent, TransformComponent>> Bodies,
         List<Contact> Contacts,
-        List<(Joint Original, Joint Joint)> Joints,
+        List<CMUSolverJoint> Joints, // CMU14: endpoints are already resolved during island construction.
         List<(Joint Joint, float Error)> BrokenJoints)
     {
         /// <summary>
@@ -174,7 +179,7 @@ public abstract partial class SharedPhysicsSystem
 
         public readonly List<Entity<PhysicsComponent, TransformComponent>> Bodies = Bodies;
         public readonly List<Contact> Contacts = Contacts;
-        public readonly List<(Joint Original, Joint Joint)> Joints = Joints;
+        public readonly List<CMUSolverJoint> Joints = Joints; // CMU14
         public bool PositionSolved = false;
         public readonly List<(Joint Joint, float Error)> BrokenJoints = BrokenJoints;
     }
@@ -478,7 +483,7 @@ public abstract partial class SharedPhysicsSystem
                                 uidB = jointCompB.Relay.Value;
                             }
 
-                            var copy = joint.Clone(uidA, uidB);
+                            var copy = CMUGetSolverJoint(joint, uidA, uidB); // CMU14: reuse unchanged distance-joint copies.
                             _islandJoints.Add((joint, copy));
                             joint.IslandFlag = true;
                         }
@@ -508,7 +513,7 @@ public abstract partial class SharedPhysicsSystem
                             uidB = jointCompB.Relay.Value;
                         }
 
-                        var copy = joint.Clone(uidA, uidB);
+                        var copy = CMUGetSolverJoint(joint, uidA, uidB); // CMU14: keep solver mutation separate from joint events.
                         _islandJoints.Add((joint, copy));
                         joint.IslandFlag = true;
                     }
@@ -523,7 +528,7 @@ public abstract partial class SharedPhysicsSystem
                         !bodyB.CanCollide)
                         continue;
 
-                    joints.Add((original, joint));
+                    joints.Add(new CMUSolverJoint(original, joint, bodyA, bodyB)); // CMU14: reuse these endpoints in the solver.
 
                     if (!bodyA.Island)
                     {
@@ -603,7 +608,7 @@ public abstract partial class SharedPhysicsSystem
         _islandBodyPool.Return(island.Bodies);
         _islandContactPool.Return(island.Contacts);
 
-        foreach (var (original, joint) in island.Joints)
+        foreach (var (original, joint, _, _) in island.Joints) // CMU14: body references live only as long as this island.
         {
             // Do we need to copy data back to the original?
             if (original != joint)
@@ -766,8 +771,15 @@ public abstract partial class SharedPhysicsSystem
         bool[] sleepStatus)
     {
         var bodyCount = island.Bodies.Count;
-        var positions = ArrayPool<Vector2>.Shared.Rent(bodyCount);
-        var angles = ArrayPool<float>.Shared.Rent(bodyCount);
+        // CMU14 Begin: solver jobs never overlap on one worker; avoid four pool round trips per island.
+        // var positions = ArrayPool<Vector2>.Shared.Rent(bodyCount);
+        // var angles = ArrayPool<float>.Shared.Rent(bodyCount);
+        var contactCount = island.Contacts.Count;
+        var scratch = _cmuSolverScratch.Value!;
+        scratch.EnsureCapacity(bodyCount, contactCount);
+        var positions = scratch.Positions;
+        var angles = scratch.Angles;
+        // CMU14 End
         var offset = island.Offset;
         var gravity = Gravity;
 
@@ -815,19 +827,21 @@ public abstract partial class SharedPhysicsSystem
             angularVelocities[i + offset] = angularVelocity;
         }
 
-        var contactCount = island.Contacts.Count;
-        var velocityConstraints = ArrayPool<ContactVelocityConstraint>.Shared.Rent(contactCount);
-        var positionConstraints = ArrayPool<ContactPositionConstraint>.Shared.Rent(contactCount);
+        // CMU14 Begin: unconstrained islands have no contact arrays or contact initialization work.
+        // var velocityConstraints = ArrayPool<ContactVelocityConstraint>.Shared.Rent(contactCount);
+        // var positionConstraints = ArrayPool<ContactPositionConstraint>.Shared.Rent(contactCount);
+        var velocityConstraints = scratch.Velocities;
+        var positionConstraints = scratch.Contacts;
 
         // Pass the data into the solver
-        ResetSolver(in data, in island, velocityConstraints, positionConstraints);
-
-        InitializeVelocityConstraints(in data, in island, velocityConstraints, positionConstraints, positions, angles, linearVelocities, angularVelocities);
-
-        if (data.WarmStarting)
+        if (contactCount > 0)
         {
-            WarmStart(in data, in island, velocityConstraints, linearVelocities, angularVelocities);
+            ResetSolver(in data, in island, velocityConstraints, positionConstraints);
+            InitializeVelocityConstraints(in data, in island, velocityConstraints, positionConstraints, positions, angles, linearVelocities, angularVelocities);
+            if (data.WarmStarting)
+                WarmStart(in data, in island, velocityConstraints, linearVelocities, angularVelocities);
         }
+        // CMU14 End
 
         var jointCount = island.Joints.Count;
 
@@ -835,12 +849,15 @@ public abstract partial class SharedPhysicsSystem
         {
             for (var i = 0; i < island.Joints.Count; i++)
             {
-                var joint = island.Joints[i].Joint;
+                var entry = island.Joints[i]; // CMU14: use the bodies that supplied this island's solver indices.
+                var joint = entry.Joint;
                 if (!joint.Enabled) continue;
 
-                var bodyA = PhysicsQuery.GetComponent(joint.BodyAUid);
-                var bodyB = PhysicsQuery.GetComponent(joint.BodyBUid);
-                joint.InitVelocityConstraints(in data, in island, bodyA, bodyB, positions, angles, linearVelocities, angularVelocities);
+                // CMU14 Begin
+                // var bodyA = PhysicsQuery.GetComponent(joint.BodyAUid);
+                // var bodyB = PhysicsQuery.GetComponent(joint.BodyBUid);
+                joint.InitVelocityConstraints(in data, in island, entry.BodyA, entry.BodyB, positions, angles, linearVelocities, angularVelocities);
+                // CMU14 End
             }
         }
 
@@ -862,11 +879,13 @@ public abstract partial class SharedPhysicsSystem
                     island.BrokenJoints.Add((island.Joints[j].Original, error));
             }
 
-            SolveVelocityConstraints(in island, velocityConstraints, linearVelocities, angularVelocities);
+            if (contactCount > 0) // CMU14: joint-only and free islands have no contact velocity constraints.
+                SolveVelocityConstraints(in island, velocityConstraints, linearVelocities, angularVelocities);
         }
 
         // Store for warm starting.
-        StoreImpulses(in island, velocityConstraints);
+        if (contactCount > 0) // CMU14: there are no warm-start impulses to store without contacts.
+            StoreImpulses(in island, velocityConstraints);
 
         var maxVel = data.MaxTranslation / data.FrameTime;
         var maxVelSq = maxVel * maxVel;
@@ -901,7 +920,8 @@ public abstract partial class SharedPhysicsSystem
 
         for (var i = 0; i < data.PositionIterations; i++)
         {
-            var contactsOkay = SolvePositionConstraints(in data, in island, positionConstraints, positions, angles);
+            var contactsOkay = contactCount == 0 || // CMU14: the empty constraint set is already solved.
+                SolvePositionConstraints(in data, in island, positionConstraints, positions, angles);
             var jointsOkay = true;
 
             for (var j = 0; j < island.Joints.Count; ++j)
@@ -1004,10 +1024,12 @@ public abstract partial class SharedPhysicsSystem
         }
 
         // Cleanup
-        ArrayPool<Vector2>.Shared.Return(positions);
-        ArrayPool<float>.Shared.Return(angles);
-        ArrayPool<ContactVelocityConstraint>.Shared.Return(velocityConstraints);
-        ArrayPool<ContactPositionConstraint>.Shared.Return(positionConstraints);
+        // CMU14 Begin: the worker owns this scratch until system shutdown.
+        // ArrayPool<Vector2>.Shared.Return(positions);
+        // ArrayPool<float>.Shared.Return(angles);
+        // ArrayPool<ContactVelocityConstraint>.Shared.Return(velocityConstraints);
+        // ArrayPool<ContactPositionConstraint>.Shared.Return(positionConstraints);
+        // CMU14 End
     }
 
     private void FinalisePositions(int start, int end, int offset, List<Entity<PhysicsComponent, TransformComponent>> bodies, Vector2[] positions, float[] angles, Vector2[] solvedPositions, float[] solvedAngles)

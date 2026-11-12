@@ -91,6 +91,7 @@ public abstract partial class SharedPhysicsSystem
 
     private const int ContactPoolInitialSize = 128;
     private const int ContactsPerThread = 32;
+    protected virtual int ContactBatchSize => ContactsPerThread; // CMU14: keep client scheduling unchanged.
 
     private ObjectPool<Contact> _contactPool = default!;
 
@@ -401,9 +402,15 @@ public abstract partial class SharedPhysicsSystem
 
     internal void CollideContacts()
     {
+        // CMU14 Begin: simulation owns these buffers; all manifold workers finish before reuse.
+        if (ContactCount == 0)
+            return;
+        _cmuContactScratch.EnsureContacts(ContactCount);
         // Due to the fact some contacts may be removed (and we need to update this array as we iterate).
         // the length may not match the actual contact count, hence we track the index.
-        var contacts = ArrayPool<Contact>.Shared.Rent(ContactCount);
+        // var contacts = ArrayPool<Contact>.Shared.Rent(ContactCount);
+        var contacts = _cmuContactScratch.Contacts;
+        // CMU14 End
         var index = 0;
 
         // Can be changed while enumerating
@@ -566,8 +573,13 @@ public abstract partial class SharedPhysicsSystem
             contacts[index++] = contact;
         }
 
-        var status = ArrayPool<ContactStatus>.Shared.Rent(index);
-        var worldPoints = ArrayPool<FixedArray4<Vector2>>.Shared.Rent(index);
+        // CMU14 Begin: reserve output only for contacts that survived filtering.
+        // var status = ArrayPool<ContactStatus>.Shared.Rent(index);
+        // var worldPoints = ArrayPool<FixedArray4<Vector2>>.Shared.Rent(index);
+        _cmuContactScratch.EnsureManifolds(index);
+        var status = _cmuContactScratch.Status;
+        var worldPoints = _cmuContactScratch.WorldPoints;
+        // CMU14 End
 
         // Update contacts all at once.
         BuildManifolds(contacts, index, status, worldPoints);
@@ -596,9 +608,12 @@ public abstract partial class SharedPhysicsSystem
             RunContactEvents(status[i], contact, worldPoints[i]);
         }
 
-        ArrayPool<Contact>.Shared.Return(contacts);
-        ArrayPool<ContactStatus>.Shared.Return(status);
-        ArrayPool<FixedArray4<Vector2>>.Shared.Return(worldPoints);
+        // CMU14 Begin: release entity references while retaining reusable value-type storage.
+        // ArrayPool<Contact>.Shared.Return(contacts);
+        // ArrayPool<ContactStatus>.Shared.Return(status);
+        // ArrayPool<FixedArray4<Vector2>>.Shared.Return(worldPoints);
+        Array.Clear(contacts, 0, index);
+        // CMU14 End
     }
 
     internal void RunContactEvents(ContactStatus status, Contact contact, FixedArray4<Vector2> worldPoint)
@@ -661,16 +676,19 @@ public abstract partial class SharedPhysicsSystem
             return;
 
         using var _mz = _prof.Group("Generate Manifolds");
-        var wake = ArrayPool<bool>.Shared.Rent(count);
-
-        _parallel.ProcessNow(new ManifoldsJob()
-        {
-            Physics = this,
-            Status = status,
-            WorldPoints = worldPoints,
-            Contacts = contacts,
-            Wake = wake,
-        }, count);
+        // CMU14 Begin: reuse the job as well as its output; struct-to-interface dispatch otherwise boxes every substep.
+        // var wake = ArrayPool<bool>.Shared.Rent(count);
+        var wake = _cmuContactScratch.Wake;
+        var job = _cmuManifoldsJob;
+        job.Physics = this;
+        job.Status = status;
+        job.WorldPoints = worldPoints;
+        job.Contacts = contacts;
+        job.Wake = wake;
+        job.BatchSize = Math.Max(ContactsPerThread,
+            Math.Min(ContactBatchSize, count / (Environment.ProcessorCount * 2)));
+        _parallel.ProcessNow(job, count);
+        // CMU14 End
 
         // Can't do this during UpdateContacts due to IoC threading issues.
         for (var i = 0; i < count; i++)
@@ -688,19 +706,21 @@ public abstract partial class SharedPhysicsSystem
             SetAwake((bUid, bodyB), true);
         }
 
-        ArrayPool<bool>.Shared.Return(wake);
+        // ArrayPool<bool>.Shared.Return(wake); // CMU14: retained by the contact pass.
     }
 
-    private record struct ManifoldsJob : IParallelRobustJob
+    private sealed class ManifoldsJob : IParallelRobustJob // CMU14: retained, non-boxing job.
     {
-        public int BatchSize => ContactsPerThread;
+        public int BatchSize { get; set; } = ContactsPerThread; // CMU14: bounded server batches preserve worker parallelism.
 
-        public SharedPhysicsSystem Physics;
+        public SharedPhysicsSystem Physics = default!; // CMU14
 
-        public Contact[] Contacts;
-        public ContactStatus[] Status;
-        public FixedArray4<Vector2>[] WorldPoints;
-        public bool[] Wake;
+        // CMU14 Begin: set before every synchronous dispatch.
+        public Contact[] Contacts = Array.Empty<Contact>();
+        public ContactStatus[] Status = Array.Empty<ContactStatus>();
+        public FixedArray4<Vector2>[] WorldPoints = Array.Empty<FixedArray4<Vector2>>();
+        public bool[] Wake = Array.Empty<bool>();
+        // CMU14 End
 
         public void Execute(int index)
         {
