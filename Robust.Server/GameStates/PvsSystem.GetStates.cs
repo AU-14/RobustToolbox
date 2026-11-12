@@ -100,7 +100,7 @@ internal sealed partial class PvsSystem
             return null;
 
         changed ??= GetComponentChangeList(0); // CMU14: retain empty entry/removal states and their wire representation.
-        var entState = new EntityState(meta.NetEntity, changed, meta.EntityLastModifiedTick, netComps);
+        var entState = CMUGetEntityState(meta.NetEntity, changed, meta.EntityLastModifiedTick, netComps); // CMU14
 
         return entState;
     }
@@ -112,7 +112,12 @@ internal sealed partial class PvsSystem
         stateEv.State = null;
         stateEv.ExcludeReplays = false;
 
-        _getStateHandlers![netId]?.Invoke(uid, comp, ref Unsafe.As<ComponentGetState, EntityEventBus.Unit>(ref stateEv));
+        // CMU14: keep any later recipient filter outside the shared handler snapshot cache.
+        if (!CMUTrySharedState(comp, ref stateEv))
+        {
+            _getStateHandlers![netId]?.Invoke(uid, comp, ref Unsafe.As<ComponentGetState, EntityEventBus.Unit>(ref stateEv));
+            CMUStoreSharedState(comp, ref stateEv);
+        }
 
         var state = stateEv.State;
         excludeReplays = stateEv.ExcludeReplays;
@@ -146,7 +151,7 @@ internal sealed partial class PvsSystem
             netComps.Add(netId);
         }
 
-        var entState = new EntityState(meta.NetEntity, changed, meta.EntityLastModifiedTick, netComps);
+        var entState = CMUGetEntityState(meta.NetEntity, changed, meta.EntityLastModifiedTick, netComps); // CMU14
 
         return entState;
     }
@@ -161,7 +166,7 @@ internal sealed partial class PvsSystem
         var fromTick = pvsSession.FromTick;
 
         var toSend = _uidSetPool.Get();
-        var chunkStates = new ValueList<EntityState>();
+        var chunkStates = pvsSession.CMUChunkStates; // CMU14: retain ordering scratch across replay/non-culling ticks.
         DebugTools.Assert(toSend.Count == 0);
         bool enumerateAll = false;
         DebugTools.AssertEqual(toTick, _gameTiming.CurTick);
@@ -210,7 +215,7 @@ Metadata last modified: {md.LastModifiedTick}
 Transform last modified: {Transform(uid).LastModifiedTick}");
                 }
 
-                AddOrderedState(pvsSession, state, md, ref chunkStates);
+                AddOrderedState(pvsSession, state, md, chunkStates); // CMU14
             }
         }
         else
@@ -247,7 +252,7 @@ Transform last modified: {Transform(uid).LastModifiedTick}");
                         continue;
                     }
 
-                    AddOrderedState(pvsSession, state, md, ref chunkStates);
+                    AddOrderedState(pvsSession, state, md, chunkStates); // CMU14
                 }
 
                 foreach (var uid in dirty)
@@ -264,12 +269,13 @@ Transform last modified: {Transform(uid).LastModifiedTick}");
                     // CMU14: only recipient-visible changes need an entity-state wrapper.
                     var state = TryGetEntityState(session, uid, fromTick, md);
                     if (state != null)
-                        AddOrderedState(pvsSession, state, md, ref chunkStates);
+                        AddOrderedState(pvsSession, state, md, chunkStates); // CMU14
                 }
             }
         }
 
         pvsSession.States.AddRange(chunkStates);
+        chunkStates.Clear(); // CMU14: ownership moved to States, including exceptional cleanup.
         _uidSetPool.Return(toSend);
     }
 
@@ -277,7 +283,7 @@ Transform last modified: {Transform(uid).LastModifiedTick}");
         PvsSession pvsSession,
         EntityState state,
         MetaDataComponent meta,
-        ref ValueList<EntityState> chunkStates)
+        List<EntityState> chunkStates) // CMU14: session-owned reusable storage.
     {
         if ((meta.Flags & MetaDataFlags.ChunkEntity) != 0)
         {

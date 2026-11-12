@@ -91,7 +91,7 @@ internal sealed partial class PvsSystem
         session.LeftViewChunkEntities.Clear();
     }
 
-    private record struct PvsLeaveJob(PvsSystem _pvs) : IParallelRobustJob
+    private sealed class PvsLeaveJob(PvsSystem _pvs) : IParallelRobustJob // CMU14: retain the job instead of boxing a struct at each dispatch.
     {
         public int BatchSize => 2;
         private PvsSystem _pvs = _pvs;

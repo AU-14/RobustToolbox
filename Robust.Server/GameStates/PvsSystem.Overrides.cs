@@ -107,6 +107,11 @@ internal sealed partial class PvsSystem
     /// </summary>
     private bool RecursivelyAddOverride(PvsSession session, EntityUid uid, GameTick fromTick, bool addChildren, int mask)
     {
+        // CMU14: only successful chains, keyed by the exact visibility mask, may be skipped.
+        // Child expansion still runs when requested; a prior parent-only visit does not cover descendants.
+        if (!addChildren && session.CMUOverrideAncestors.Contains((uid, mask)))
+            return true;
+
         if (!_xformQuery.TryGetComponent(uid, out var xform))
         {
             // Can happen if systems add deleted entities to PVS move event.
@@ -131,6 +136,8 @@ internal sealed partial class PvsSystem
 
         if (!AddEntity(session, (uid, meta), fromTick))
             return false;
+
+        session.CMUOverrideAncestors.Add((uid, mask)); // CMU14
 
         if (addChildren)
             RecursivelyAddChildren(session, xform, fromTick, mask);
@@ -188,6 +195,10 @@ internal sealed partial class PvsSystem
         out TransformComponent xform)
     {
         xform = _xformQuery.GetComponent(uid);
+
+        // CMU14: insertion happens after the entire parent chain, so a hit covers every ancestor.
+        if (set.Contains(uid))
+            return true;
 
         if (xform.ParentUid != EntityUid.Invalid && !CacheOverrideParents(xform.ParentUid, list, set, out _))
             return false;

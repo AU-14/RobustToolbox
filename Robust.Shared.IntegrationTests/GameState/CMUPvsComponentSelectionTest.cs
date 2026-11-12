@@ -9,6 +9,8 @@ using Robust.Shared.GameObjects;
 using Robust.Shared.GameStates;
 using Robust.Shared.Map;
 using Robust.Shared.Player;
+using Robust.Shared.Physics.Components;
+using Robust.Shared.Physics.Systems;
 using Robust.Shared.Serialization;
 using Robust.Shared.Timing;
 
@@ -94,6 +96,7 @@ public sealed class CMUPvsComponentSelectionTest : RobustIntegrationTest
             entity = entities.SpawnAttachedTo(null, new EntityCoordinates(map, default));
             component = entities.AddComponent<CMUSelectionTestComponent>(entity);
             ownerComponent = entities.AddComponent<CMUSelectionOwnerTestComponent>(entity);
+            entities.AddComponent<PhysicsComponent>(entity);
             owner.SetupGet(p => p.AttachedEntity).Returns(entity);
         });
         await server.WaitRunTicks(3);
@@ -103,6 +106,9 @@ public sealed class CMUPvsComponentSelectionTest : RobustIntegrationTest
             component.Value = 12;
             entities.Dirty(entity, component);
             entities.Dirty(entity, ownerComponent);
+            server.System<SharedTransformSystem>().SetLocalPosition(entity, Vector2.UnitX);
+            server.System<SharedPhysicsSystem>().SetLinearVelocity(entity, Vector2.UnitY);
+            server.System<MetaDataSystem>().SetEntityName(entity, "first snapshot");
         });
         await server.WaitRunTicks(2);
         var laterAck = server.Timing.CurTick - 1;
@@ -166,15 +172,21 @@ public sealed class CMUPvsComponentSelectionTest : RobustIntegrationTest
                 Compare(null, earlierAck, state => Assert.That(state.ComponentChanges.Value.Any(c => c.NetID == sessionId), Is.False));
                 Compare(owner.Object, laterAck, state => Assert.That(state.ComponentChanges.Value.Any(c => c.NetID == sessionId), Is.False));
                 Compare(owner.Object, GameTick.Zero);
+                Compare(observer.Object, GameTick.Zero);
 
                 // Another serialization pass in the same game tick must see components dirtied after the previous pass.
                 active.SetValue(pvs, false);
                 clear();
                 component.Value = 34;
+                server.System<SharedTransformSystem>().SetLocalPosition(entity, Vector2.One);
+                server.System<SharedPhysicsSystem>().SetLinearVelocity(entity, Vector2.One);
+                server.System<MetaDataSystem>().SetEntityName(entity, "second snapshot");
                 entities.Dirty(entity, component);
                 Compare(owner.Object, laterAck, state => Assert.That(
                     ((CMUSelectionTestState) state.ComponentChanges.Value.Single(c => c.NetID == sessionId).State!).Value,
                     Is.EqualTo(34)));
+                Compare(observer.Object, earlierAck);
+                Compare(observer.Object, GameTick.Zero);
 
                 // Removal needs the full visible component list, including unchanged components, for each recipient.
                 active.SetValue(pvs, false);

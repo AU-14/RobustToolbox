@@ -91,7 +91,12 @@ public sealed partial class ChunkEntitySystemTest
             Chunk = Vector2i.Zero,
         };
 
+        // CMU14: Release reaches the PVS guard after the earlier Debug-only assertion is compiled out.
+#if DEBUG
         Assert.Throws<DebugAssertException>(() => entMan.AddComponent(second, comp));
+#else
+        Assert.Throws<InvalidOperationException>(() => entMan.AddComponent(second, comp));
+#endif
     }
 
     /// <summary>

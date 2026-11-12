@@ -367,7 +367,7 @@ internal sealed partial class PvsSystem
         _dataFreeListHead = index;
     }
 
-    private record struct PvsDeletionsJob(PvsSystem _pvs) : IParallelRobustJob
+    private sealed class PvsDeletionsJob(PvsSystem _pvs) : IParallelRobustJob // CMU14: retain the job instead of boxing a struct at each dispatch.
     {
         public int BatchSize => 8;
         private PvsSystem _pvs = _pvs;

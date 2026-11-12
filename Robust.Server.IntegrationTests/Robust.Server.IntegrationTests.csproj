@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
   <Import Project="..\MSBuild\Robust.Engine.props"/>
 
   <PropertyGroup>
@@ -17,6 +17,8 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- CMU14: exercise the real packet writer with the integration runner's native compression libraries. -->
+    <ProjectReference Include="..\Lidgren.Network\Lidgren.Network.csproj" />
     <ProjectReference Include="..\Robust.Client\Robust.Client.csproj" />
     <ProjectReference Include="..\Robust.Server.Testing\Robust.Server.Testing.csproj" />
     <ProjectReference Include="..\Robust.Server\Robust.Server.csproj" />

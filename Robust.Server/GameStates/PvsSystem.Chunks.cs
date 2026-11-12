@@ -8,6 +8,7 @@ using Prometheus;
 using Robust.Shared.Enums;
 using Robust.Shared.GameObjects;
 using Robust.Shared.GameStates;
+using Robust.Shared.Map; // CMU14
 using Robust.Shared.Map.Components;
 using Robust.Shared.Map.Enumerators;
 using Robust.Shared.Maths;
@@ -42,6 +43,7 @@ internal sealed partial class PvsSystem
     private readonly Dictionary<EntityUid, HashSet<PvsChunkLocation>> _chunkSets = new();
 
     private List<Entity<MapGridComponent>> _grids = new();
+    private readonly Dictionary<EntityUid, Matrix3x2> _cmuGridInverses = new(); // CMU14: transforms are fixed during chunk discovery.
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Vector2i GetChunkIndices(Vector2 coordinates) => (coordinates / ChunkSize).Floored();
@@ -110,10 +112,12 @@ internal sealed partial class PvsSystem
                 session.Chunks.Clear();
                 session.ChunkSet.Clear();
                 GetSessionViewers(session);
+                session.CMUViewPositions.Clear(); // CMU14
 
                 foreach (var eye in session.Viewers)
                 {
-                    GetVisibleChunks(eye, session.ChunkSet);
+                    GetVisibleChunks(eye, session.ChunkSet, out var position); // CMU14
+                    session.CMUViewPositions.Add((position, MathF.Max(eye.Comp2?.PvsScale ?? 1, 0.1f))); // CMU14
                 }
             }
         }
@@ -122,6 +126,7 @@ internal sealed partial class PvsSystem
             foreach (var list in _visibleChunkRegions.Values)
                 list.Clear();
             _visibleChunkRegions.Clear();
+            _cmuGridInverses.Clear(); // CMU14
         }
         // CMU14 End
         DebugTools.Assert(_dirtyChunks.ToHashSet().Count == _dirtyChunks.Count);
@@ -133,9 +138,10 @@ internal sealed partial class PvsSystem
     /// </summary>
     // CMU14: share exact chunk searches while keeping each viewer's grid intersection and bounds.
     private void GetVisibleChunks(Entity<TransformComponent, EyeComponent?> eye,
-        HashSet<PvsChunk> chunks)
+        HashSet<PvsChunk> chunks, out MapCoordinates position) // CMU14
     {
         var (viewPos, range, mapUid) = CalcViewBounds(eye);
+        position = new MapCoordinates(viewPos, eye.Comp1.MapID); // CMU14: same eye offset and world pose as ordering.
         if (mapUid is not {} map)
             return;
 
@@ -148,7 +154,13 @@ internal sealed partial class PvsSystem
 
         foreach (var (grid, _) in _grids)
         {
-            var localPos = Vector2.Transform(viewPos, _transform.GetInvWorldMatrix(grid));
+            // CMU14: many viewers share a grid; resolve its inverse once in this pass.
+            if (!_cmuGridInverses.TryGetValue(grid, out var inverse))
+            {
+                inverse = _transform.GetInvWorldMatrix(grid);
+                _cmuGridInverses.Add(grid, inverse);
+            }
+            var localPos = Vector2.Transform(viewPos, inverse);
             AddVisibleChunks(grid, localPos, range, chunks);
         }
     }

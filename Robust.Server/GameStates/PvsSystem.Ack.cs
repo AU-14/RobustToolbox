@@ -68,7 +68,7 @@ internal sealed partial class PvsSystem
         return _parallelManager.Process(_ackJob, _ackJob.Count);
     }
 
-    private record struct PvsAckJob(PvsSystem _pvs) : IParallelRobustJob
+    private sealed class PvsAckJob(PvsSystem _pvs) : IParallelRobustJob // CMU14: retain the job instead of boxing a struct at each dispatch.
     {
         public int BatchSize => 2;
         private PvsSystem _pvs = _pvs;
@@ -87,7 +87,7 @@ internal sealed partial class PvsSystem
         }
     }
 
-    private record struct PvsChunkJob(PvsSystem _pvs) : IParallelRobustJob
+    private sealed class PvsChunkJob(PvsSystem _pvs) : IParallelRobustJob // CMU14: retain the job instead of boxing a struct at each dispatch.
     {
         public int BatchSize => 2;
         private PvsSystem _pvs = _pvs;

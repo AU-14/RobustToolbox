@@ -76,11 +76,13 @@ internal sealed partial class PvsSystem : EntitySystem
     private readonly List<PvsSession> _toAck = new();
     internal readonly HashSet<ICommonSession> PendingAcks = new();
 
-    private PvsAckJob _ackJob;
-    private PvsChunkJob _chunkJob;
-    private PvsLeaveJob _leaveJob;
-    private PvsDeletionsJob _deletionJob;
-    private PvsSendJob _sendJob;
+    // CMU14 Begin: reference-type jobs are initialized once with the system.
+    private PvsAckJob _ackJob = default!;
+    private PvsChunkJob _chunkJob = default!;
+    private PvsLeaveJob _leaveJob = default!;
+    private PvsDeletionsJob _deletionJob = default!;
+    private PvsSendJob _sendJob = default!;
+    // CMU14 End
     private GameTick _sendTick;
 
     private EntityQuery<EyeComponent> _eyeQuery;
@@ -132,6 +134,7 @@ internal sealed partial class PvsSystem : EntitySystem
         _leaveJob = new PvsLeaveJob(this);
         _chunkJob = new PvsChunkJob(this);
         _ackJob = new PvsAckJob(this);
+        _cmuSerializeState = SerializeState; // CMU14
 
         _eyeQuery = GetEntityQuery<EyeComponent>();
         _metaQuery = GetEntityQuery<MetaDataComponent>();
@@ -184,6 +187,8 @@ internal sealed partial class PvsSystem : EntitySystem
         ShutdownDirty();
         _componentChangeLists.Dispose(); // CMU14: release worker caches when this world shuts down.
         _componentSelections.Dispose(); // CMU14: release component-selection scratch with this world.
+        _cmuSharedStates.Dispose(); // CMU14
+        _cmuEntityStates.Dispose(); // CMU14
         _getStateHandlers = null;
     }
 
@@ -468,6 +473,7 @@ internal sealed partial class PvsSystem : EntitySystem
                 FreeSessionDataMemory(pvsSession);
             }
         }
+        _disconnected.Clear(); // CMU14: completed disconnections must not retain sessions or be rescanned every tick.
     }
 
     private WaitHandle? _sendTask;
