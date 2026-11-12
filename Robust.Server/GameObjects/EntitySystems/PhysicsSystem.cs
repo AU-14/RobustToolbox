@@ -18,6 +18,7 @@ namespace Robust.Server.GameObjects
 
         // CMU14: amortize thread-pool dispatch for the server's many small independent islands.
         protected override int IslandBatchSize => 4;
+        protected override int ContactBatchSize => 128; // CMU14: amortize dispatch for inexpensive contact manifolds.
 
         public override void Initialize()
         {

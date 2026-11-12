@@ -79,8 +79,9 @@ public abstract partial class SharedPhysicsSystem
             velocityConstraint.NormalMass = System.Numerics.Vector4.Zero;
 
             ref var positionConstraint = ref positionConstraints[i];
-            positionConstraint.IndexA = bodyA.IslandIndex[island.Index];
-            positionConstraint.IndexB = bodyB.IslandIndex[island.Index];
+            // CMU14: velocity and position constraints describe the same two island bodies.
+            positionConstraint.IndexA = velocityConstraint.IndexA;
+            positionConstraint.IndexB = velocityConstraint.IndexB;
             (positionConstraint.InvMassA, positionConstraint.InvMassB) = (invMassA, invMassB);
             positionConstraint.LocalCenterA = bodyA.LocalCenter;
             positionConstraint.LocalCenterB = bodyB.LocalCenter;
@@ -181,7 +182,7 @@ public abstract partial class SharedPhysicsSystem
         for (var i = 0; i < contactCount; ++i)
         {
             ref var velocityConstraint = ref velocityConstraints[i];
-            var positionConstraint = positionConstraints[i];
+            ref var positionConstraint = ref positionConstraints[i]; // CMU14: read the existing constraint without a struct copy.
 
             var radiusA = positionConstraint.RadiusA;
             var radiusB = positionConstraint.RadiusB;
@@ -298,7 +299,7 @@ public abstract partial class SharedPhysicsSystem
 
         for (var i = 0; i < island.Contacts.Count; ++i)
         {
-            var velocityConstraint = velocityConstraints[i];
+            ref var velocityConstraint = ref velocityConstraints[i]; // CMU14: warm starting only reads constraint data.
             var velPoints = velocityConstraint.Points.AsSpan;
 
             var indexA = velocityConstraint.IndexA;
@@ -673,7 +674,7 @@ public abstract partial class SharedPhysicsSystem
 
         for (int i = start; i < end; ++i)
         {
-            var pc = positionConstraints[i];
+            ref var pc = ref positionConstraints[i]; // CMU14: avoid copying the constraint in every position iteration.
 
             int indexA = pc.IndexA;
             int indexB = pc.IndexB;
