@@ -83,10 +83,19 @@ internal sealed partial class PvsSystem
         // I,e, we already enumerate over all eyes when computing visible chunks.
         Span<(MapCoordinates pos, float scale)> positions = stackalloc (MapCoordinates, float)[session.Viewers.Length];
         int i = 0;
+        var cachedPositions = session.CMUViewPositions.Count == session.Viewers.Length; // CMU14
         foreach (var viewer in session.Viewers)
         {
             if (viewer.Comp2 != null)
                 session.VisMask |= viewer.Comp2.VisibilityMask;
+
+            // CMU14: standalone/non-culling computations still resolve their own current poses.
+            if (cachedPositions)
+            {
+                positions[i] = session.CMUViewPositions[i];
+                i++;
+                continue;
+            }
 
             var mapCoordinates = _transform.GetMapCoordinates(viewer.Owner, viewer.Comp1);
             mapCoordinates = mapCoordinates.Offset(viewer.Comp2?.Offset ?? Vector2.Zero);

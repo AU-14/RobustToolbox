@@ -34,9 +34,26 @@ namespace Robust.Shared.Network.Messages
 
         internal bool ForceSendReliably;
 
+        // CMU14: server-prepared bytes let the packet allocate its exact capacity. These are not wire fields.
+        private byte[] _cmuCompressedData;
+        private int _cmuCompressedLength;
+
+        internal void CMUPrepare(byte[] scratch)
+        {
+            if (scratch == null || StateStream.Length <= CompressionThreshold)
+                return;
+            _cmuCompressedLength = CompressionContext.Compress2(scratch, StateStream.AsSpan());
+            _cmuCompressedData = scratch;
+        }
+
+        internal void CMUReleasePrepared() => _cmuCompressedData = null;
+
         public override int EstimateBufferSize()
         {
             var uncompressedLength = (int) StateStream.Length;
+            // CMU14: the normal reader and compression thresholds are unchanged.
+            if (_cmuCompressedData != null)
+                return 1 + VariableInt32Size(uncompressedLength) + VariableInt32Size(_cmuCompressedLength) + _cmuCompressedLength;
             // We have no idea what the compressed size will be but we'll try and guess slightly over
             // mostly want to avoid a small initial size and then immediately copying.
             var payloadLength = uncompressedLength > CompressionThreshold
@@ -111,17 +128,28 @@ namespace Robust.Shared.Network.Messages
             buffer.WriteVariableInt32((int)StateStream.Length);
 
             // We compress the state.
-            if (StateStream.Length > CompressionThreshold)
+            // CMU14: reuse the bytes already compressed for exact packet sizing.
+            if (_cmuCompressedData != null)
+            {
+                buffer.WriteVariableInt32(_cmuCompressedLength);
+                buffer.Write(_cmuCompressedData.AsSpan(0, _cmuCompressedLength));
+            }
+            else if (StateStream.Length > CompressionThreshold)
             {
                 // var sw = Stopwatch.StartNew();
                 StateStream.Position = 0;
                 var buf = ArrayPool<byte>.Shared.Rent(ZStd.CompressBound((int)StateStream.Length));
-                var length = CompressionContext.Compress2(buf, StateStream.AsSpan());
-
-                buffer.WriteVariableInt32(length);
-                buffer.Write(buf.AsSpan(0, length));
-
-                ArrayPool<byte>.Shared.Return(buf);
+                // CMU14: failed compression must not strand a rented large buffer.
+                try
+                {
+                    var length = CompressionContext.Compress2(buf, StateStream.AsSpan());
+                    buffer.WriteVariableInt32(length);
+                    buffer.Write(buf.AsSpan(0, length));
+                }
+                finally
+                {
+                    ArrayPool<byte>.Shared.Return(buf);
+                }
             }
             // The state is sent as is.
             else

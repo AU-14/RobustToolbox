@@ -15,6 +15,9 @@ namespace Robust.Server.GameStates;
 internal sealed partial class PvsSystem
 {
     [Dependency] private IRobustSerializer _serializer = default!;
+    // CMU14: retain scheduler inputs across joined passes, including the original exception semantics.
+    private readonly ParallelOptions _cmuSerializeOptions = new();
+    private Action<int> _cmuSerializeState = default!;
 
     /// <summary>
     /// Get and serialize <see cref="GameState"/> objects for each player. Compressing & sending the states is done later.
@@ -22,13 +25,14 @@ internal sealed partial class PvsSystem
     private void SerializeStates()
     {
         using var _ = Histogram.WithLabels("Serialize States").NewTimer();
-        var opts = new ParallelOptions {MaxDegreeOfParallelism = _parallelMgr.ParallelProcessCount};
+        // var opts = new ParallelOptions {MaxDegreeOfParallelism = _parallelMgr.ParallelProcessCount}; // CMU14
+        _cmuSerializeOptions.MaxDegreeOfParallelism = _parallelMgr.ParallelProcessCount;
         _oldestAck = GameTick.MaxValue.Value;
         // CMU14 Begin: component membership and dirty ticks are read-only until all serialization workers join.
         _componentSelectionActive = _sessions.Length > 1;
         try
         {
-            Parallel.For(-1, _sessions.Length, opts, SerializeState);
+            Parallel.For(-1, _sessions.Length, _cmuSerializeOptions, _cmuSerializeState); // CMU14
         }
         finally
         {

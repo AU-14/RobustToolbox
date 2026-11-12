@@ -29,7 +29,7 @@ internal sealed partial class PvsSystem
         _parallelManager.ProcessNow(_sendJob, _sendJob.Count);
     }
 
-    private void SendSessionState(PvsSession data, ZStdCompressionContext ctx, GameTick sendTick)
+    private void SendSessionState(PvsSession data, ZStdCompressionContext ctx, GameTick sendTick, byte[]? compressionBuffer = null) // CMU14
     {
         // CMU14: neither partial output nor a synthetic reliable ACK may escape a failed state.
         if (data.StateSerializationFailed)
@@ -54,7 +54,16 @@ internal sealed partial class PvsSystem
                 CompressionContext = ctx
             };
 
-            _netMan.ServerSendMessage(msg, data.Session.Channel);
+            // CMU14: compress once before packet allocation, then release the borrowed buffer reference.
+            try
+            {
+                msg.CMUPrepare(compressionBuffer!);
+                _netMan.ServerSendMessage(msg, data.Session.Channel);
+            }
+            finally
+            {
+                msg.CMUReleasePrepared();
+            }
             // The channel can disconnect between our check and the network manager's check.
             if (msg.HasWritten && msg.ShouldSendReliably())
             {
@@ -78,7 +87,7 @@ internal sealed partial class PvsSystem
         }
     }
 
-    private record struct PvsSendJob(PvsSystem _pvs) : IParallelRobustJob
+    private sealed class PvsSendJob(PvsSystem _pvs) : IParallelRobustJob // CMU14: retain the job instead of boxing a struct at each dispatch.
     {
         public int BatchSize => 1;
         private PvsSystem _pvs = _pvs;
@@ -91,7 +100,8 @@ internal sealed partial class PvsSystem
 
             try
             {
-                _pvs.SendSessionState(data, resource.CompressionContext, _pvs._sendTick);
+                _pvs.SendSessionState(data, resource.CompressionContext, _pvs._sendTick,
+                    resource.GetCompressionBuffer((int) (data.StateStream?.Length ?? 0))); // CMU14
             }
             catch (Exception e)
             {

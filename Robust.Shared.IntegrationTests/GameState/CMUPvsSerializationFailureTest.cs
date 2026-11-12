@@ -46,7 +46,7 @@ public sealed class CMUPvsSerializationFailureTest : RobustIntegrationTest
             var serialize = typeof(PvsSystem).GetMethod("SerializeSessionState", flags)!
                 .CreateDelegate<Action<PvsSession>>(pvs);
             var send = typeof(PvsSystem).GetMethod("SendSessionState", flags)!
-                .CreateDelegate<Action<PvsSession, ZStdCompressionContext, GameTick>>(pvs);
+                .CreateDelegate<Action<PvsSession, ZStdCompressionContext, GameTick, byte[]?>>(pvs);
             try
             {
                 for (var attempt = 0; attempt < 2; attempt++)
@@ -61,7 +61,7 @@ public sealed class CMUPvsSerializationFailureTest : RobustIntegrationTest
                         Assert.That(data.LastReceivedAck, Is.EqualTo(ack));
                     });
                     // A failed send must not even inspect the channel, compress bytes, or synthesize an ACK.
-                    Assert.DoesNotThrow(() => send(data, null!, server.Timing.CurTick));
+                    Assert.DoesNotThrow(() => send(data, null!, server.Timing.CurTick, null));
                     Assert.That(data.LastReceivedAck, Is.EqualTo(ack));
                 }
 

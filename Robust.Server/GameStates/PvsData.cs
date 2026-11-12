@@ -7,6 +7,7 @@ using System.Runtime.InteropServices;
 using Robust.Shared.Collections;
 using Robust.Shared.GameObjects;
 using Robust.Shared.GameStates;
+using Robust.Shared.Map; // CMU14
 using Robust.Shared.Network;
 using Robust.Shared.Network.Messages;
 using Robust.Shared.Player;
@@ -71,6 +72,7 @@ internal sealed class PvsSession(ICommonSession session, ResizableMemoryRegion<P
     /// Squared distance ta all of the visible chunks.
     /// </summary>
     public readonly List<float> ChunkDistanceSq = new();
+    public readonly List<(MapCoordinates Position, float Scale)> CMUViewPositions = new(); // CMU14: snapshot shared by chunk discovery and ordering.
 
     /// <summary>
     /// The client's current eyes/viewers.
@@ -93,6 +95,8 @@ internal sealed class PvsSession(ICommonSession session, ResizableMemoryRegion<P
     /// List of entity states to send to the client.
     /// </summary>
     public readonly List<EntityState> States = new();
+    public readonly List<EntityState> CMUChunkStates = new(); // CMU14: replay/non-culling ordering scratch.
+    public readonly HashSet<(EntityUid Entity, int Mask)> CMUOverrideAncestors = new(); // CMU14: successful parent chains in this pass.
 
     /// <summary>
     /// Information about the current number of entities that are being sent to the player this tick. Used to enforce
@@ -149,6 +153,9 @@ internal sealed class PvsSession(ICommonSession session, ResizableMemoryRegion<P
         Chunks.Clear();
         ChunkSet.Clear();
         States.Clear();
+        CMUChunkStates.Clear(); // CMU14
+        CMUOverrideAncestors.Clear(); // CMU14
+        CMUViewPositions.Clear(); // CMU14
     }
 }
 

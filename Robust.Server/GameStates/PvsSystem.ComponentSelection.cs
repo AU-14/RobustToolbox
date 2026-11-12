@@ -63,6 +63,7 @@ internal sealed partial class PvsSystem
 
     private void ClearComponentSelections()
     {
+        CMUClearSharedStates(); // CMU14: payload and component-selection caches have the same pass lifetime.
         // All workers have joined. Release entity/component references even if a worker is not used next tick.
         foreach (var cache in _componentSelections.Values)
         {

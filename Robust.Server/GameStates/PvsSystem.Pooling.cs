@@ -26,6 +26,7 @@ internal sealed partial class PvsSystem
     private const int MaxPooledComponentChangeCapacity = 64;
     private readonly ThreadLocal<Stack<List<ComponentChange>>> _componentChangeLists
         = new(static () => new());
+    private readonly ThreadLocal<Stack<EntityState>> _cmuEntityStates = new(static () => new());
     // CMU14 End
 
     private readonly ObjectPool<HashSet<EntityUid>> _uidSetPool
@@ -70,6 +71,20 @@ internal sealed partial class PvsSystem
     {
         public ZStdCompressionContext CompressionContext = new();
 
+        // CMU14: normal packets reuse bounded worker scratch; unusually large full states use ArrayPool.
+        private byte[] _compressionBuffer = Array.Empty<byte>();
+        public byte[]? GetCompressionBuffer(int stateLength)
+        {
+            if (stateLength <= Robust.Shared.Network.Messages.MsgState.CompressionThreshold)
+                return null;
+            var required = ZStd.CompressBound(stateLength);
+            if (required > 1024 * 1024)
+                return null;
+            if (_compressionBuffer.Length < required)
+                _compressionBuffer = new byte[Math.Min(1024 * 1024, Math.Max(required, _compressionBuffer.Length * 2))];
+            return _compressionBuffer;
+        }
+
         ~PvsThreadResources()
         {
             CompressionContext.Dispose();
@@ -100,6 +115,20 @@ internal sealed partial class PvsSystem
         return _netComponentSetPool.Get();
     }
 
+    // CMU14: the serialized stream owns the bytes before any wrapper is returned.
+    private EntityState CMUGetEntityState(NetEntity entity, List<ComponentChange> changes,
+        Robust.Shared.Timing.GameTick modified, HashSet<ushort>? components)
+    {
+        if (!_cmuEntityStates.Value!.TryPop(out var state))
+            return new EntityState(entity, changes, modified, components);
+
+        state.NetEntity = entity;
+        state.ComponentChanges = changes;
+        state.EntityLastModified = modified;
+        state.NetComponents = components;
+        return state;
+    }
+
     private void ReturnEntityState(EntityState state)
     {
         if (state.ComponentChanges.Value is List<ComponentChange> changes)
@@ -110,6 +139,13 @@ internal sealed partial class PvsSystem
             _netComponentSetPool.Return(netComps);
             state.NetComponents = null;
         }
+
+        // CMU14: pooled wrappers must not retain payloads or returned lists.
+        state.ComponentChanges = Array.Empty<ComponentChange>();
+        state.NetEntity = default;
+        state.EntityLastModified = default;
+        if (_cmuEntityStates.Value!.Count < MaxVisPoolSize)
+            _cmuEntityStates.Value.Push(state);
     }
 
     internal void ClearSessionState(PvsSession session)
@@ -118,6 +154,10 @@ internal sealed partial class PvsSystem
         {
             ReturnEntityState(state);
         }
+
+        // CMU14: generation can fail before ordered chunk states are transferred to States.
+        foreach (var state in session.CMUChunkStates)
+            ReturnEntityState(state);
 
         session.ClearState();
     }

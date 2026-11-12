@@ -14,11 +14,11 @@ namespace Robust.Shared.GameObjects
         /// </summary>
         public NetEntity NetEntity;
 
-        public NetListAsArray<ComponentChange> ComponentChanges { get; }
+        public NetListAsArray<ComponentChange> ComponentChanges { get; internal set; } // CMU14: server-only wrapper reuse; same serialized backing field.
 
         public bool Empty => (ComponentChanges.Value is null or { Count: 0 }) && NetComponents == null;
 
-        public readonly GameTick EntityLastModified;
+        public GameTick EntityLastModified; // CMU14: reusable server wrapper; wire field name/type/order are unchanged.
 
         /// <summary>
         ///     Set of all networked component ids. Only sent to clients if a component has been removed sometime since the
