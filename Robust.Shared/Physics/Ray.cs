@@ -16,6 +16,9 @@ namespace Robust.Shared.Physics
         /// </summary>
         public Vector2 Position;
 
+        // CMU14: Tree pruning and precise hits must agree on near-parallel directions.
+        internal const float ParallelEpsilon = 1.0E-07f;
+
         /// <summary>
         ///     Specifies the direction the ray is pointing.
         /// </summary>
@@ -44,7 +47,7 @@ namespace Robust.Shared.Physics
 
             var tmin = 0.0f; // set to -FLT_MAX to get first hit on line
             var tmax = float.MaxValue; // set to max distance ray can travel (for segment)
-            const float epsilon = 1.0E-07f;
+            const float epsilon = ParallelEpsilon; // CMU14
 
             // X axis slab
             {
