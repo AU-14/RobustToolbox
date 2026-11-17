@@ -10,6 +10,58 @@ namespace Robust.Shared.Tests.Physics;
 public sealed class CMUFiniteRayTest
 {
     [Test]
+    public void InternalBoundsKeepTheSameHitsAsCastingAgainstEachLeaf()
+    {
+        var tree = new B2DynamicTree<Box2>();
+        var boxes = new List<Box2>();
+        for (var x = -3; x <= 3; x++)
+        for (var y = -3; y <= 3; y++)
+        {
+            var box = Box2.UnitCentered.Translated(new Vector2(x * 2, y * 2));
+            tree.CreateProxy(box, uint.MaxValue, box);
+            boxes.Add(box);
+        }
+        tree.Rebuild(true);
+
+        // Include corner grazes, starts within a leaf and nearly parallel rays on either
+        // side of the slab tolerance. Pick the endpoint from a real leaf intersection.
+        var rays = new (Vector2 Origin, Vector2 Direction)[]
+        {
+            (Vector2.Zero, Vector2.One),
+            (new(1, 0), new(-1, 1)),
+            (new(0.25f, -0.25f), new(-1, -0.5f)),
+            (new(0, 1), new(1, -1)),
+            (Vector2.Zero, new(1e-8f, -1)),
+            (Vector2.Zero, new(-1, 1e-6f)),
+        };
+        foreach (var (origin, direction) in rays)
+        {
+            var ray = new Ray(origin, Vector2.Normalize(direction));
+            var hits = new List<(Box2 Box, float Distance, Vector2 Point)>();
+            foreach (var box in boxes)
+            {
+                if (ray.Intersects(box, out var distance, out var hit))
+                    hits.Add((box, distance, hit));
+            }
+
+            var endpoint = hits.Max(hit => hit.Distance);
+            foreach (var length in new[] { MathF.BitDecrement(endpoint), endpoint })
+            {
+                var actual = new List<(Box2, float, Vector2)>();
+                tree.RayCast(ref actual, (ref List<(Box2, float, Vector2)> result,
+                    DynamicTree.Proxy proxy, in Vector2 point, float distance) =>
+                {
+                    result.Add((tree.GetUserData(proxy), distance, point));
+                    return true;
+                }, ray, length);
+
+                Assert.That(actual, Is.EquivalentTo(hits.Where(hit => hit.Distance <= length)),
+                    $"Origin {origin}, direction {ray.Direction}, length {length}");
+            }
+        }
+    }
+
+    [Test]
     public void PreciseBoundsExcludeDistantLeavesWhoseFatBoundsIntersectTheSegment()
     {
         var tree = new DynamicTree<Box2>(static (in Box2 bounds) => bounds);

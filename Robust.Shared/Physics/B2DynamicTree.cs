@@ -2340,6 +2340,17 @@ namespace Robust.Shared.Physics
         // CMU14 method: bounded rays can reject whole subtrees beyond their endpoint.
         public void RayCast<TState>(ref TState state, RayQueryCallback<TState> callback, in Ray input, float maxLength)
         {
+            if (_root == Proxy.Free)
+                return;
+
+            // A ray crosses many internal bounds. Reuse the reciprocal direction there and
+            // leave leaf hits to Ray.Intersects so callbacks get its exact point and distance.
+            var inverse = Vector2.One / input.Direction;
+            // Parallel rays also need Ray.Intersects' handling of origins on a slab boundary.
+            var useSlabs = MathF.Abs(input.Direction.X) >= Ray.ParallelEpsilon &&
+                           MathF.Abs(input.Direction.Y) >= Ray.ParallelEpsilon &&
+                           float.IsFinite(input.Position.X) && float.IsFinite(input.Position.Y) &&
+                           float.IsFinite(input.Direction.X) && float.IsFinite(input.Direction.Y);
             var stack = new GrowableStack<Proxy>(stackalloc Proxy[256]);
 
             stack.Push(_root);
@@ -2349,39 +2360,39 @@ namespace Robust.Shared.Physics
             {
                 var proxy = stack.Pop();
 
-                if (proxy == Proxy.Free)
-                {
-                    continue;
-                }
-
                 ref var node = ref Unsafe.Add(ref baseRef, proxy);
-
-                if (!input.Intersects(node.Aabb, out var dist, out var hit) || dist > maxLength)
-                {
-                    continue;
-                }
 
                 if (node.IsLeaf)
                 {
-                    var carryOn = callback(ref state, proxy, hit, dist);
+                    if (!input.Intersects(node.Aabb, out var distance, out var hit) || distance > maxLength)
+                        continue;
 
-                    if (!carryOn)
-                    {
+                    if (!callback(ref state, proxy, hit, distance))
                         return;
-                    }
-                }
-                else
-                {
-                    if (node.Child1 != Proxy.Free)
-                    {
-                        stack.Push(node.Child1);
-                    }
 
-                    if (node.Child2 != Proxy.Free)
-                    {
-                        stack.Push(node.Child2);
-                    }
+                    continue;
                 }
+
+                if (useSlabs)
+                {
+                    var first = (node.Aabb.BottomLeft - input.Position) * inverse;
+                    var second = (node.Aabb.TopRight - input.Position) * inverse;
+                    var near = Vector2.MinNative(first, second);
+                    var far = Vector2.MaxNative(first, second);
+                    var enter = MathF.Max(0, MathF.Max(near.X, near.Y));
+                    if (enter > far.X || enter > far.Y || enter > maxLength)
+                        continue;
+                }
+                else if (!input.Intersects(node.Aabb, out var distance, out _) || distance > maxLength)
+                {
+                    continue;
+                }
+
+                if (node.Child1 != Proxy.Free)
+                    stack.Push(node.Child1);
+
+                if (node.Child2 != Proxy.Free)
+                    stack.Push(node.Child2);
             }
         }
 
